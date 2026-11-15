@@ -23,7 +23,7 @@ let logs = "";
 let fakeHost: http.Server | undefined;
 const hostCalls: Array<{ method: string; input: any }> = [];
 const hostStatus = new Map<string, "idle" | "busy" | "waiting">();
-let hostRefusal: { code: string; status: number } | null = null;
+let hostRefusal: { code: string; status: number; method?: string } | null = null;
 const previousInbox = process.env.OPENCHAMBER_CANVAS_INBOX;
 
 function freePort(): Promise<number> {
@@ -77,7 +77,7 @@ function startFakeHost(): Promise<number> {
         if (request.headers.authorization !== `Bearer ${TOKEN}`) return answer(401, { error: { code: "HOST_UNAVAILABLE", message: "token" } });
         const { method, input } = JSON.parse(raw) as { method: string; input: any };
         hostCalls.push({ method, input });
-        if (hostRefusal && method.startsWith("sessions.")) return answer(hostRefusal.status, { error: { code: hostRefusal.code, message: "recusado" } });
+        if (hostRefusal && (hostRefusal.method ? method === hostRefusal.method : method.startsWith("sessions."))) return answer(hostRefusal.status, { error: { code: hostRefusal.code, message: "recusado" } });
         if (method === "sessions.status") return answer(200, { result: { status: hostStatus.get(input.sessionId) ?? "idle" } });
         if (method === "sessions.send") return answer(200, { result: { sent: true } });
         if (method === "panels.emit") return answer(200, { result: { delivered: true } });
@@ -248,6 +248,23 @@ describe("serviço (ponta a ponta)", () => {
       hostRefusal = null;
       assert.equal(status, 502);
       assert.deepEqual(json, { ok: false, code: "host-refused" });
+    });
+
+    it("B1: envio sem resposta utilizável → 502 'unconfirmed' e o pedido seguinte da mesma sessão é recusado (sem duplicar)", async () => {
+      hostRefusal = { code: "HOST_UNAVAILABLE", status: 503, method: "sessions.send" };
+      const first = await call("POST", "/update-request", { sessionId: "ses_semresposta" });
+      hostRefusal = null;
+      assert.deepEqual(first, { status: 502, json: { ok: false, code: "unconfirmed" } });
+      const before = sends().length;
+      assert.deepEqual(await call("POST", "/update-request", { sessionId: "ses_semresposta" }), { status: 429, json: { ok: false, code: "too-soon" } });
+      assert.equal(sends().length, before);
+    });
+
+    it("B2: SESSION_BUSY no envio → 409 busy", async () => {
+      hostRefusal = { code: "SESSION_BUSY", status: 409, method: "sessions.send" };
+      const result = await call("POST", "/update-request", { sessionId: "ses_busyenvio" });
+      hostRefusal = null;
+      assert.deepEqual(result, { status: 409, json: { ok: false, code: "busy" } });
     });
 
     it("a falha anterior não bloqueia: logo depois o pedido da mesma sessão funciona", async () => {

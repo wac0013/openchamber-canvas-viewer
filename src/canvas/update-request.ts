@@ -23,13 +23,14 @@ export const UPDATE_MESSAGES: Record<UpdateFailure, { kind: "info" | "error"; me
   "not-granted": { kind: "error", message: "Reaprove a extensão em Settings → Extensions: ela agora precisa da permissão de controle de sessão." },
   "service-outdated": { kind: "error", message: "O serviço da extensão está desatualizado: pause e retome a extensão em Settings → Extensions." },
   "host-refused": { kind: "error", message: "O OpenChamber recusou o pedido. Tente de novo." },
+  unconfirmed: { kind: "error", message: "Não foi possível confirmar o envio. Confira o chat antes de pedir de novo." },
   "invalid-session": { kind: "error", message: "Sessão inválida. Reabra a sessão e tente de novo." },
   unavailable: { kind: "error", message: "Não foi possível falar com o serviço da extensão." },
 };
 
 export const UPDATE_SENT_MESSAGE = "Pedido de atualização enviado ao agente.";
 
-const CODES: ReadonlySet<string> = new Set(["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session"]);
+const CODES: ReadonlySet<string> = new Set(["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session", "unconfirmed"]);
 
 function parse(body: string): UpdateRequestResponse | null {
   try {

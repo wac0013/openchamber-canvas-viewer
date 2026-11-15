@@ -768,15 +768,25 @@ function readError(value) {
 }
 
 // service/update-request.ts
-function isHostError(error) {
-  return typeof error === "object" && error !== null && typeof error.code === "string";
+var monotonicNow = () => performance.now();
+function codeOf(error) {
+  return typeof error === "object" && error !== null && typeof error.code === "string" ? error.code : "";
 }
-function createUpdateRequester(host2, now = Date.now, minIntervalMs = UPDATE_MIN_INTERVAL_MS) {
+function statusOf(error) {
+  return typeof error === "object" && error !== null && typeof error.status === "number" ? error.status : 0;
+}
+function refusal(error) {
+  const code = codeOf(error);
+  if (code === "NOT_GRANTED" || statusOf(error) === 403) return "not-granted";
+  if (code === "SESSION_BUSY") return "busy";
+  return "host-refused";
+}
+var unconfirmed = (error) => ["HOST_UNAVAILABLE", "HOST_TIMEOUT"].includes(codeOf(error));
+function createUpdateRequester(host2, now = monotonicNow, minIntervalMs = UPDATE_MIN_INTERVAL_MS) {
   const reserved = /* @__PURE__ */ new Map();
   const prune = (at) => {
     for (const [id, when] of reserved) if (at - when >= minIntervalMs) reserved.delete(id);
   };
-  const failure = (error) => ({ ok: false, code: isHostError(error) && error.code === "NOT_GRANTED" ? "not-granted" : "host-refused" });
   return {
     async request(sessionId) {
       if (!SESSION_ID_PATTERN.test(sessionId)) return { ok: false, code: "invalid-session" };
@@ -784,17 +794,27 @@ function createUpdateRequester(host2, now = Date.now, minIntervalMs = UPDATE_MIN
       prune(at);
       if (reserved.has(sessionId)) return { ok: false, code: "too-soon" };
       reserved.set(sessionId, at);
+      let status;
       try {
-        const { status } = await host2.status(sessionId);
-        if (status !== "idle") {
-          reserved.delete(sessionId);
-          return { ok: false, code: status === "waiting" ? "waiting" : "busy" };
-        }
+        status = (await host2.status(sessionId)).status;
+      } catch (error) {
+        reserved.delete(sessionId);
+        return { ok: false, code: refusal(error) };
+      }
+      if (status !== "idle") {
+        reserved.delete(sessionId);
+        return { ok: false, code: status === "waiting" ? "waiting" : "busy" };
+      }
+      try {
         await host2.send(sessionId, UPDATE_REQUEST_TEXT);
         return { ok: true };
       } catch (error) {
+        if (unconfirmed(error)) {
+          reserved.set(sessionId, now());
+          return { ok: false, code: "unconfirmed" };
+        }
         reserved.delete(sessionId);
-        return failure(error);
+        return { ok: false, code: refusal(error) };
       }
     }
   };
@@ -817,7 +837,7 @@ var updateRequester = createUpdateRequester({
   status: (sessionId) => host.sessions.status(sessionId),
   send: (sessionId, prompt) => host.sessions.send(sessionId, prompt)
 });
-var UPDATE_STATUS = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502 };
+var UPDATE_STATUS = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502, unconfirmed: 502 };
 function authorized(header) {
   const expected = Buffer.from(`Bearer ${TOKEN}`);
   const given = Buffer.from(String(header ?? ""));

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 
 import { requestCanvasUpdate, UPDATE_MESSAGES, UPDATE_SENT_MESSAGE } from "../src/canvas/update-request.ts";
 import { UPDATE_MIN_INTERVAL_MS, UPDATE_REQUEST_MARKER, UPDATE_REQUEST_TEXT } from "../src/shared/contract.ts";
@@ -119,6 +119,58 @@ describe("createUpdateRequester", () => {
     assert.equal(JSON.stringify(result).includes("segredo"), false);
   });
 
+  it("B1: envio sem resposta utilizável (timeout, host fora) → 'unconfirmed' e a vaga CONTINUA reservada, contada a partir da falha", async () => {
+    for (const code of ["HOST_UNAVAILABLE", "HOST_TIMEOUT"]) {
+      const sends: string[] = [];
+      let clock = 100;
+      const requester = createUpdateRequester({ status: async () => ({ status: "idle" }), send: async (id) => { sends.push(id); throw Object.assign(new Error("x"), { code }); } }, () => clock);
+      assert.deepEqual(await requester.request("ses_A"), { ok: false, code: "unconfirmed" });
+      clock += 4000;
+      assert.deepEqual(await requester.request("ses_A"), { ok: false, code: "too-soon" });
+      assert.equal(sends.length, 1, "não duplica");
+      clock += UPDATE_MIN_INTERVAL_MS;
+      assert.deepEqual(await requester.request("ses_A"), { ok: false, code: "unconfirmed" });
+      assert.equal(sends.length, 2);
+    }
+  });
+
+  it("B1: a vaga do 'unconfirmed' é contada do momento da falha (um envio lento não a deixa vencer sozinho)", async () => {
+    let clock = 0;
+    const requester = createUpdateRequester({ status: async () => ({ status: "idle" }), send: async () => { clock += 30_000; throw Object.assign(new Error("x"), { code: "HOST_TIMEOUT" }); } }, () => clock);
+    assert.equal((await requester.request("ses_A")).ok, false);
+    assert.deepEqual(await requester.request("ses_A"), { ok: false, code: "too-soon" });
+  });
+
+  it("falha ao consultar o status não enviou nada: libera a vaga", async () => {
+    let fail = true;
+    const sent: string[] = [];
+    const requester = createUpdateRequester({ status: async () => { if (fail) throw Object.assign(new Error("x"), { code: "HOST_UNAVAILABLE" }); return { status: "idle" }; }, send: async (id) => { sent.push(id); } }, () => 5);
+    assert.deepEqual(await requester.request("ses_A"), { ok: false, code: "host-refused" });
+    fail = false;
+    assert.equal((await requester.request("ses_A")).ok, true);
+    assert.deepEqual(sent, ["ses_A"]);
+  });
+
+  it("B2: SESSION_BUSY lançado pelo envio vira 'busy' e libera a vaga; HTTP 403 vira 'not-granted'", async () => {
+    const busy = setup({}, { failSend: Object.assign(new Error("x"), { code: "SESSION_BUSY" }) });
+    assert.deepEqual(await busy.requester.request("ses_A"), { ok: false, code: "busy" });
+    const denied = setup({}, { failSend: Object.assign(new Error("x"), { status: 403 }) });
+    assert.deepEqual(await denied.requester.request("ses_A"), { ok: false, code: "not-granted" });
+  });
+
+  it("B3: o relógio padrão é monotônico — um ajuste do relógio do sistema não afeta as vagas", async () => {
+    const sent: string[] = [];
+    const requester = createUpdateRequester({ status: async () => ({ status: "idle" }), send: async (id) => { sent.push(id); } });
+    const spy = mock.method(Date, "now", () => { throw new Error("não deve usar Date.now"); });
+    try {
+      assert.equal((await requester.request("ses_A")).ok, true);
+      assert.deepEqual(await requester.request("ses_A"), { ok: false, code: "too-soon" });
+    } finally {
+      spy.mock.restore();
+    }
+    assert.deepEqual(sent, ["ses_A"]);
+  });
+
   it("falha ao enviar libera a vaga (o usuário pode tentar de novo)", async () => {
     let fail = true;
     const sent: string[] = [];
@@ -148,7 +200,7 @@ describe("requestCanvasUpdate (lado do painel)", () => {
   });
 
   it("traduz cada código do serviço para uma razão com mensagem ao usuário", async () => {
-    for (const code of ["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session"] as const) {
+    for (const code of ["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session", "unconfirmed"] as const) {
       const result = await requestCanvasUpdate(host(409, JSON.stringify({ ok: false, code })), "ses_A");
       assert.deepEqual(result, { ok: false, reason: code });
       assert.ok(UPDATE_MESSAGES[code].message.length > 10);

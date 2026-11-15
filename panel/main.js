@@ -2332,11 +2332,12 @@ ${GUEST_UI_LOOK_CSS}`;
     "not-granted": { kind: "error", message: "Reaprove a extens\xE3o em Settings \u2192 Extensions: ela agora precisa da permiss\xE3o de controle de sess\xE3o." },
     "service-outdated": { kind: "error", message: "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions." },
     "host-refused": { kind: "error", message: "O OpenChamber recusou o pedido. Tente de novo." },
+    unconfirmed: { kind: "error", message: "N\xE3o foi poss\xEDvel confirmar o envio. Confira o chat antes de pedir de novo." },
     "invalid-session": { kind: "error", message: "Sess\xE3o inv\xE1lida. Reabra a sess\xE3o e tente de novo." },
     unavailable: { kind: "error", message: "N\xE3o foi poss\xEDvel falar com o servi\xE7o da extens\xE3o." }
   };
   var UPDATE_SENT_MESSAGE = "Pedido de atualiza\xE7\xE3o enviado ao agente.";
-  var CODES = /* @__PURE__ */ new Set(["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session"]);
+  var CODES = /* @__PURE__ */ new Set(["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session", "unconfirmed"]);
   function parse(body) {
     try {
       const value = JSON.parse(body);

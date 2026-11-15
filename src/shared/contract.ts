@@ -74,6 +74,6 @@ export const UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o ca
 export const UPDATE_MIN_INTERVAL_MS = 5000;
 
 /** Por que o pedido de atualização não foi enviado. Só categorias: nunca eco de conteúdo. */
-export type UpdateRequestCode = "busy" | "waiting" | "too-soon" | "not-granted" | "host-refused" | "invalid-session";
+export type UpdateRequestCode = "busy" | "waiting" | "too-soon" | "not-granted" | "host-refused" | "invalid-session" | "unconfirmed";
 
 export type UpdateRequestResponse = { ok: true } | { ok: false; code: UpdateRequestCode };

@@ -23,7 +23,7 @@ agente ──canvas_publish(html)──▶ plugin (no OpenCode) ──arquivo─
 2. Abra o painel **Canvas** na barra lateral.
 3. Peça ao agente algo como: "mostre um resumo do status no canvas". Ele usará `canvas_publish`.
 
-Requer OpenChamber ≥ 2.6.1.
+Requer OpenChamber ≥ 2.7.0 (a permissão `sessionControl` do botão Atualizar não existe em versões anteriores).
 
 ## Skills para os agentes
 
@@ -59,6 +59,7 @@ O ideal é o agente atualizar o canvas **sozinho**, conforme avança. Quando iss
 
 - **Sessão exata:** o pedido vai para a sessão dona do canvas exibido, por id, mesmo que você troque de sessão no instante do clique.
 - **Não interrompe o agente:** se ele está trabalhando, nada é enviado (o canvas se atualiza quando ele publicar). Se ele está esperando uma resposta sua (pergunta ou permissão), nada é enviado, para não fechar a pergunta pendente.
+- **Janela residual:** o host não tem uma operação "se ocioso, envie". Entre a checagem do status e o envio (milissegundos) o agente pode passar a trabalhar, e a mensagem entra na fila dele, ou passar a esperar uma resposta sua, e o envio a fecha. Se o envio falha sem resposta utilizável, o painel avisa que **não foi possível confirmar** e o serviço mantém a vaga reservada por alguns segundos; confira o chat antes de pedir de novo.
 - **Sem acúmulo:** um pedido por vez por sessão, com intervalo mínimo de 5 s; o botão fica desabilitado enquanto o pedido está em voo.
 - **Texto fixo:** a mensagem nunca contém conteúdo do canvas (gerado por agente).
 - **Permissão nova:** para enviar com a sessão explícita, a extensão declara `sessionControl` (sem `content` nem `answers`), que aparece como linha própria no diálogo de aprovação. **Ao atualizar de uma versão anterior, reaprove a extensão** em Settings → Extensions. Enquanto não reaprovar, o botão avisa e não envia nada.
@@ -126,7 +127,7 @@ Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estr
 
 ### 0.5.0
 - Botão **Atualizar** no cabeçalho do painel: pedido formal ao agente para republicar o canvas, enviado em nome do usuário para a sessão dona do canvas (id explícito), sem interromper o agente. A skill reconhece o pedido pelo marcador.
-- Nova permissão declarada: `sessionControl` (reaprovação necessária). `SERVICE_VERSION` 2: um serviço antigo é sinalizado no painel.
+- Nova permissão declarada: `sessionControl` (reaprovação necessária). Piso de versão do OpenChamber: 2.7.0. `SERVICE_VERSION` 2: um serviço antigo é sinalizado no painel.
 
 ### 0.4.0
 - Comentar passa a ser por **seleção de texto**: a barra flutuante aparece ao selecionar, e o trecho entra na caixa de mensagem como chip; o comentário é escrito no campo nativo do chat. Saíram o campo de comentário próprio e os botões que apareciam ao passar o mouse.

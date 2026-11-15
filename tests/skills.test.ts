@@ -85,7 +85,7 @@ describe("skills instaláveis por `npx skills add`", () => {
     assert.ok(documented.startsWith(UPDATE_REQUEST_MARKER), "a skill precisa citar o marcador exatamente");
     const intro = documented.replace(/ …$/, "");
     assert.ok(UPDATE_REQUEST_TEXT.startsWith(intro.slice(0, UPDATE_REQUEST_MARKER.length + 30)), "o início citado bate com o texto real");
-    for (const rule of ["pedido formal do usuário", "mesmo que ache que nada mudou", "mesmos ids"]) assert.ok(text.includes(rule), rule);
+    for (const rule of ["pedido formal do usuário", "mesmo que ache que nada mudou", "mesmos ids", "início de uma mensagem do próprio usuário"]) assert.ok(text.includes(rule), rule);
   });
 
   it("as tags documentadas na skill são exatamente as que o sanitizador aceita", async () => {

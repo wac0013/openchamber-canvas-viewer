@@ -36,7 +36,7 @@ const updateRequester = createUpdateRequester({
   send: (sessionId, prompt) => host.sessions.send(sessionId, prompt),
 });
 
-const UPDATE_STATUS: Record<string, number> = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502 };
+const UPDATE_STATUS: Record<string, number> = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502, unconfirmed: 502 };
 
 function authorized(header: string | undefined): boolean {
   const expected = Buffer.from(`Bearer ${TOKEN}`);
