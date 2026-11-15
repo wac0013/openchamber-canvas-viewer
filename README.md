@@ -25,6 +25,22 @@ agente ──canvas_publish(html)──▶ plugin (no OpenCode) ──arquivo─
 
 Requer OpenChamber ≥ 2.6.1.
 
+## Skills para os agentes
+
+A ferramenta `canvas_publish` já traz o formato na própria descrição, mas a skill **`openchamber-canvas`** ensina o uso completo: quando usar o canvas, atualizar sempre o mesmo, marcar elementos comentáveis, responder a comentários, apresentar bem nos temas claro e escuro, respeitar os limites e não repetir a visualização no chat. Inclui três exemplos prontos (acompanhamento de ações, comparação em tabela e fluxo de etapas). Pensada para agentes Claude; cita as skills de front da Anthropic (`frontend-design`, `canvas`) pelo nome, sem copiá-las.
+
+As skills ficam só neste repositório e são instaladas pelo CLI [`skills`](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add wac0013/openchamber-canvas-viewer --list          # lista as skills
+npx skills add wac0013/openchamber-canvas-viewer                 # instala (o CLI pergunta quais skills e agentes)
+npx skills add wac0013/openchamber-canvas-viewer -a claude-code  # só para o Claude Code
+```
+
+Instalação manual: copie a pasta `skills/openchamber-canvas` (com `references/`) para o diretório de skills do seu agente, por exemplo `~/.claude/skills/`.
+
+> **Sem oferta automática pós-instalação.** O instalador de extensões do OpenChamber só copia ou clona os arquivos (o SDK pede "ship the built files only"): ele não executa `npm install` nem scripts de pós-instalação do pacote. Por isso a extensão não consegue oferecer a instalação das skills sozinha, e nenhuma skill é instalada sem você rodar o comando acima.
+
 ## O que o agente pode publicar
 
 `canvas_publish({ html, title? })` — cada chamada **substitui** o canvas da conversa (envie o HTML completo).
@@ -93,6 +109,10 @@ Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estr
 - Se o OpenCode não foi iniciado pelo OpenChamber, o plugin só carrega pelo botão *Add to global config* da extensão (comportamento do host).
 
 ## Changelog
+
+### 0.3.0
+- Skill `openchamber-canvas` instalável por `npx skills add` (criar, atualizar, marcar elementos, ler comentários, limites, apresentação) com três exemplos prontos validados pelo sanitizador.
+- Testes que mantêm a skill, a descrição da ferramenta e o painel consistentes (tags e classes documentadas = aceitas).
 
 ### 0.2.0
 - Adicionar ao contexto o canvas inteiro ou um elemento marcável (chip nativo, texto estruturado, truncamento em 16 000 com aviso).

@@ -15,7 +15,8 @@ export type ParseResult =
   | { ok: true; tree: CanvasNode[]; blocked: string[] }
   | { ok: false; message: string };
 
-const ALLOWED_TAGS = new Set([
+/** Tags aceitas no canvas; a skill e a descrição da ferramenta devem listar exatamente estas. */
+export const ALLOWED_TAGS: ReadonlySet<string> = new Set([
   "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd",
   "table", "caption", "thead", "tbody", "tfoot", "tr", "th", "td", "blockquote", "pre", "code",
   "strong", "b", "em", "i", "u", "s", "mark", "small", "sub", "sup", "kbd", "br", "hr",

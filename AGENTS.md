@@ -36,6 +36,7 @@ src/canvas/    sanitize.ts (leitor estrito → árvore), snapshot.ts, panel-stat
 src/main.ts    painel (casca)
 service/       main.ts (casca HTTP), inbox.ts (caixa de entrada), store.ts (persistência por sessão), paths.ts
 plugin/        index.ts — ferramenta canvas_publish no OpenCode (conhece context.sessionID)
+skills/        <nome>/SKILL.md instaláveis por `npx skills add` (name = pasta); references/ junto
 tests/         node:test; service.e2e.test.ts sobe o serviço real
 ```
 
@@ -50,6 +51,7 @@ Fluxo: agente → `canvas_publish` (plugin) → arquivo na caixa de entrada → 
 - Painel: nunca `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`/`eval` (há teste que falha se aparecer).
 - O plugin do OpenCode não pode importar pacotes externos: o build embute tudo (só `node:*` fica de fora).
 - Ações que escrevem no chat (`host.attach`/`host.compose`) passam por `src/canvas/actions.ts`, que confere a sessão em foco imediatamente antes de cada chamada. Nunca chamar o host direto da casca do painel.
+- Skills: `name` igual à pasta, `description` sem `: ` nem ` #` (YAML sem aspas); tags e classes citadas na skill/ferramenta precisam bater com o sanitizador e o CSS (há teste). Exemplos da skill passam pelo sanitizador real.
 - Segredos nunca no repositório.
 
 ## Convenções
