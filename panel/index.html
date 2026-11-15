@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Canvas</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body { background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); font-size: 12px; line-height: 1.45; }
+      #app { display: flex; flex-direction: column; height: 100%; }
+      header { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--oc-border); flex: none; }
+      header h1 { font-size: 12px; font-weight: 600; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      header time { color: var(--oc-muted); font-size: 11px; white-space: nowrap; }
+      .banner { margin: 6px 10px 0; padding: 5px 8px; border-radius: var(--oc-radius, 6px); border: 1px solid var(--oc-border); font-size: 11px; flex: none; }
+      .banner.error { border-color: var(--oc-error); color: var(--oc-error-text, var(--oc-error)); }
+      .banner.warning { border-color: var(--oc-warning); }
+      #scroll { flex: 1; overflow: auto; padding: 8px 10px 24px; }
+      .empty { color: var(--oc-muted); text-align: center; padding: 32px 12px; }
+
+      /* Conteúdo do agente: tudo sob .cv; classes do agente chegam prefixadas com "cv-". */
+      .cv h1 { font-size: 16px; margin: 12px 0 6px; } .cv h2 { font-size: 14px; margin: 12px 0 6px; }
+      .cv h3, .cv h4, .cv h5, .cv h6 { font-size: 12px; margin: 10px 0 4px; }
+      .cv p { margin: 6px 0; } .cv ul, .cv ol { margin: 6px 0; padding-left: 20px; }
+      .cv table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+      .cv th, .cv td { border: 1px solid var(--oc-border); padding: 3px 6px; text-align: left; vertical-align: top; }
+      .cv th { background: var(--oc-subtle); }
+      .cv blockquote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--oc-border); color: var(--oc-muted); }
+      .cv pre, .cv code, .cv kbd { font-family: var(--oc-mono, monospace); font-size: 11px; }
+      .cv pre { background: var(--oc-subtle); padding: 6px 8px; border-radius: var(--oc-radius, 6px); overflow: auto; }
+      .cv code, .cv kbd { background: var(--oc-subtle); padding: 0 3px; border-radius: 3px; }
+      .cv hr { border: 0; border-top: 1px solid var(--oc-border); margin: 10px 0; }
+      .cv details { margin: 6px 0; } .cv summary { cursor: pointer; }
+      .cv mark { background: var(--oc-selection); color: inherit; }
+      .cv [data-canvas-item] { border-radius: 4px; }
+      .cv-card { border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 8px 10px; margin: 6px 0; background: var(--oc-elevated); }
+      .cv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .cv-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+      .cv-grid-2 { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); }
+      .cv-grid-3 { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+      .cv-muted { color: var(--oc-muted); } .cv-small { font-size: 11px; } .cv-big { font-size: 16px; font-weight: 600; }
+      .cv-mono { font-family: var(--oc-mono, monospace); } .cv-center { text-align: center; } .cv-right { text-align: right; }
+      .cv-ok { color: var(--oc-success); } .cv-warn { color: var(--oc-warning); } .cv-err { color: var(--oc-error-text, var(--oc-error)); } .cv-info { color: var(--oc-primary-text, var(--oc-primary)); }
+      .cv-badge { display: inline-block; padding: 0 6px; border: 1px solid var(--oc-border); border-radius: 999px; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="main.js"></script>
+  </body>
+</html>
