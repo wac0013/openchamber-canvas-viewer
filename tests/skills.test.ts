@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { buildChip, DATA_NOTICE } from "../src/canvas/context.ts";
 import { ALLOWED_TAGS, parseCanvasHtml } from "../src/canvas/sanitize.ts";
 import { LIMITS } from "../src/shared/contract.ts";
 
@@ -53,9 +54,25 @@ describe("skills instaláveis por `npx skills add`", () => {
     }
   });
 
-  it("não copia conteúdo das skills de front da Anthropic (só referencia por nome)", async () => {
+  it("referencia as skills de front da Anthropic só por nome, sem copiar o conteúdo delas", async () => {
     const text = await readFile(path.join(skillsDir, "openchamber-canvas", "SKILL.md"), "utf8");
     assert.ok(text.length < 12_000);
+    assert.match(text, /`frontend-design`/);
+    assert.match(text, /`canvas`/);
+    assert.equal(/^---\nname: (frontend-design|canvas)\n/m.test(text), false);
+  });
+
+  it("o formato de chip descrito na skill é o que buildChip realmente produz", async () => {
+    const text = await readFile(path.join(skillsDir, "openchamber-canvas", "SKILL.md"), "utf8");
+    const parsed = parseCanvasHtml('<p data-canvas-item="x">oi</p>');
+    if (!parsed.ok) throw new Error("fixture");
+    const chip = buildChip({ title: "<título>", updatedAt: 0, tree: parsed.tree }, { kind: "item", id: "x" })?.chip.text ?? "";
+    const documented = /```\n(Canvas: [\s\S]*?)```/.exec(text)?.[1] ?? "";
+    assert.ok(documented.includes(DATA_NOTICE), "a skill precisa citar o aviso de dados exatamente");
+    const real = chip.split("\n").map((line) => line.replace(/^(Canvas|Elemento): .*/, "$1: <…>"));
+    const doc = documented.trim().split("\n").map((line) => line.replace(/^(Canvas|Elemento): .*/, "$1: <…>"));
+    assert.deepEqual(real.slice(0, 4), doc.slice(0, 4));
+    assert.equal(real[4], "oi");
   });
 
   it("as tags documentadas na skill são exatamente as que o sanitizador aceita", async () => {

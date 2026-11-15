@@ -51,7 +51,7 @@ Fluxo: agente → `canvas_publish` (plugin) → arquivo na caixa de entrada → 
 - Painel: nunca `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`/`eval` (há teste que falha se aparecer).
 - O plugin do OpenCode não pode importar pacotes externos: o build embute tudo (só `node:*` fica de fora).
 - Ações que escrevem no chat (`host.attach`/`host.compose`) passam por `src/canvas/actions.ts`, que confere a sessão em foco imediatamente antes de cada chamada. Nunca chamar o host direto da casca do painel.
-- Skills: `name` igual à pasta, `description` sem `: ` nem ` #` (YAML sem aspas); tags e classes citadas na skill/ferramenta precisam bater com o sanitizador e o CSS (há teste). Exemplos da skill passam pelo sanitizador real.
+- Skills: `name` igual à pasta, `description` sem `: ` nem ` #` (YAML sem aspas); as tags listadas na skill são exatamente as do sanitizador; as classes da skill e da descrição da ferramenta são exatamente as estilizadas no painel; o formato do chip na skill vem de `context.ts` (há testes). Exemplos da skill passam pelo sanitizador real.
 - Segredos nunca no repositório.
 
 ## Convenções
