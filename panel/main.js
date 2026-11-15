@@ -2325,13 +2325,16 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/canvas/toolbar-position.ts
   var GAP = 6;
   var EDGE = 4;
+  var clamp = (value, min, max) => Math.max(min, Math.min(value, max));
   function placeToolbar(selection2, viewport, toolbar2) {
-    const centered = (selection2.left + selection2.right) / 2 - toolbar2.width / 2;
-    const left = Math.max(EDGE, Math.min(centered, viewport.width - toolbar2.width - EDGE));
+    const left = clamp((selection2.left + selection2.right) / 2 - toolbar2.width / 2, EDGE, viewport.width - toolbar2.width - EDGE);
+    const maxTop = viewport.height - toolbar2.height - EDGE;
     const above = selection2.top - toolbar2.height - GAP;
-    if (above >= EDGE) return { top: above, left, side: "above" };
-    const below = selection2.bottom + GAP;
-    return { top: Math.max(EDGE, Math.min(below, viewport.height - toolbar2.height - EDGE)), left, side: "below" };
+    if (above >= EDGE) return { top: Math.min(above, maxTop), left, side: "above" };
+    return { top: clamp(selection2.bottom + GAP, EDGE, maxTop), left, side: "below" };
+  }
+  function isInView(selection2, area) {
+    return selection2.bottom > area.top && selection2.top < area.bottom;
   }
 
   // src/canvas/view.ts
@@ -2419,7 +2422,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (!selection2 || selection2.rangeCount !== 1 || selection2.isCollapsed || !content) return null;
     const range = selection2.getRangeAt(0);
     if (!content.contains(range.commonAncestorContainer)) return null;
-    const text = normalizeSelection(selection2.toString());
+    const text = normalizeSelection(range.toString());
     if (!text) return null;
     const anchor = range.commonAncestorContainer;
     const element = anchor instanceof Element ? anchor : anchor.parentElement;
@@ -2460,6 +2463,10 @@ ${GUEST_UI_LOOK_CSS}`;
       if (!toolbar.hidden) hideToolbar();
       return;
     }
+    if (!isInView(found.rect, scroll.getBoundingClientRect())) {
+      if (!toolbar.hidden) hideToolbar();
+      return;
+    }
     const wanted = found.picked.itemId ? "item" : "plain";
     if (toolbar.hidden || toolbar.dataset.mode !== wanted) {
       toolbar.dataset.mode = wanted;
@@ -2479,6 +2486,16 @@ ${GUEST_UI_LOOK_CSS}`;
     toolbarFrame = requestAnimationFrame(() => {
       toolbarFrame = 0;
       updateToolbar();
+    });
+  }
+  function makeItemKeyboardReachable(element, id) {
+    element.tabIndex = 0;
+    element.setAttribute("role", "group");
+    element.setAttribute("aria-label", `Elemento ${id}. Enter adiciona ao contexto do chat.`);
+    element.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.target !== element) return;
+      event.preventDefault();
+      void actions.addToContext({ kind: "item", id }).then((result) => report(result, "Elemento adicionado ao contexto"));
     });
   }
   function render() {
@@ -2513,7 +2530,7 @@ ${GUEST_UI_LOOK_CSS}`;
         if (view.error) head.push(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
         if (view.blocked.length) head.push(banner("warning", `Conte\xFAdo bloqueado e removido: ${view.blocked.join(", ")}.`));
         const content = el2("div", "cv");
-        content.append(buildNodes(view.tree));
+        content.append(buildNodes(view.tree, document, makeItemKeyboardReachable));
         body.push(content);
         break;
       }

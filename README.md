@@ -62,6 +62,7 @@ Tudo usa o **chip nativo** da caixa de mensagem do OpenChamber (mesmo visual e m
 | **Comentar** um trecho | selecione texto no canvas; a barra flutuante aparece junto da seleção | o trecho vira um chip na caixa de mensagem; escreva o comentário e envie |
 | **+ Elemento** | a mesma barra, quando a seleção está dentro de um elemento marcado pelo agente (`data-canvas-item`) | chip com o elemento inteiro |
 | **+ Contexto** | botão no cabeçalho do painel | chip com o canvas inteiro |
+| **Enter** em um elemento marcado | navegue com Tab até o elemento (contorno de foco) e tecle Enter | chip com o elemento inteiro (alternativa de teclado; a barra de seleção depende do mouse ou de Shift+setas) |
 
 - A barra só aparece quando há texto do canvas selecionado (nunca no cabeçalho nem em outro lugar do painel).
 - O contexto é **texto puro**: marcação que aparecer no conteúdo chega literalmente, nunca renderizada nem executada.
@@ -108,7 +109,7 @@ Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estr
 - A reconciliação de canvases órfãos (sessão excluída com a extensão desligada) não existe; o evento de exclusão só é entregue com a extensão ativa.
 - Sessões dentro de espaços isolados (containers) não carregam plugins do host; nelas `canvas_publish` não existe.
 - Existe uma janela residual: o painel só sabe da troca de sessão quando o host avisa (`onSession`); um clique no instante exato da troca, antes desse aviso chegar ao painel, pode escrever no composer da nova sessão. Ela não pode ser fechada só com a API pública do SDK.
-- O chip e o texto são escritos no composer **visível** no momento da chamada (`attach`/`compose` do host gravam num slot que o composer montado consome na hora); por isso a extensão confere a sessão imediatamente antes de cada chamada. Se o host mudar esse comportamento, a verificação de sessão correta precisa ser refeita.
+- O chip é escrito no composer **visível** no momento da chamada (`attach` do host grava num slot que o composer montado consome na hora); por isso a extensão confere a sessão imediatamente antes de cada chamada. Se o host mudar esse comportamento, a verificação de sessão correta precisa ser refeita.
 - Se o OpenCode não foi iniciado pelo OpenChamber, o plugin só carrega pelo botão *Add to global config* da extensão (comportamento do host).
 
 ## Changelog

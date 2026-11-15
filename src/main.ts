@@ -7,7 +7,7 @@ import { createActions, FAILURE_MESSAGES, type ActionResult } from "./canvas/act
 import { normalizeSelection } from "./canvas/context.ts";
 import { parseCanvasResponse, viewFromResponse, type PanelView } from "./canvas/panel-state.ts";
 import { structureSignature } from "./canvas/sanitize.ts";
-import { placeToolbar } from "./canvas/toolbar-position.ts";
+import { isInView, placeToolbar } from "./canvas/toolbar-position.ts";
 import { buildNodes, formatTime } from "./canvas/view.ts";
 
 const POLL_MS = 1500;
@@ -84,7 +84,7 @@ function pickedSelection(): { picked: Picked; rect: DOMRect } | null {
   if (!selection || selection.rangeCount !== 1 || selection.isCollapsed || !content) return null;
   const range = selection.getRangeAt(0);
   if (!content.contains(range.commonAncestorContainer)) return null;
-  const text = normalizeSelection(selection.toString());
+  const text = normalizeSelection(range.toString());
   if (!text) return null;
   const anchor = range.commonAncestorContainer;
   const element = anchor instanceof Element ? anchor : anchor.parentElement;
@@ -130,6 +130,10 @@ function updateToolbar(): void {
     if (!toolbar.hidden) hideToolbar();
     return;
   }
+  if (!isInView(found.rect, scroll.getBoundingClientRect())) {
+    if (!toolbar.hidden) hideToolbar();
+    return;
+  }
   const wanted = found.picked.itemId ? "item" : "plain";
   if (toolbar.hidden || toolbar.dataset.mode !== wanted) {
     toolbar.dataset.mode = wanted;
@@ -150,6 +154,18 @@ function scheduleToolbar(): void {
   toolbarFrame = requestAnimationFrame(() => {
     toolbarFrame = 0;
     updateToolbar();
+  });
+}
+
+/** Teclado: um elemento marcado ganha foco e, com Enter, vai inteiro para o contexto do chat. */
+function makeItemKeyboardReachable(element: HTMLElement, id: string): void {
+  element.tabIndex = 0;
+  element.setAttribute("role", "group");
+  element.setAttribute("aria-label", `Elemento ${id}. Enter adiciona ao contexto do chat.`);
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.target !== element) return;
+    event.preventDefault();
+    void actions.addToContext({ kind: "item", id }).then((result) => report(result, "Elemento adicionado ao contexto"));
   });
 }
 
@@ -188,7 +204,7 @@ function render(): void {
       if (view.error) head.push(banner("error", `Última publicação recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
       if (view.blocked.length) head.push(banner("warning", `Conteúdo bloqueado e removido: ${view.blocked.join(", ")}.`));
       const content = el("div", "cv");
-      content.append(buildNodes(view.tree));
+      content.append(buildNodes(view.tree, document, makeItemKeyboardReachable));
       body.push(content);
       break;
     }

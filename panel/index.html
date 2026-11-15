@@ -42,6 +42,7 @@
       .cv hr { border: 0; border-top: 1px solid var(--oc-border); margin: 10px 0; }
       .cv details { margin: 6px 0; } .cv summary { cursor: pointer; }
       .cv mark { background: var(--oc-selection); color: inherit; }
+      .cv [data-canvas-item]:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: 1px; border-radius: 4px; }
       .cv-card { border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 8px 10px; margin: 6px 0; background: var(--oc-elevated); }
       .cv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
       .cv-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
