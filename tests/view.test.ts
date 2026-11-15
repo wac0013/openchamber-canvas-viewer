@@ -41,6 +41,18 @@ describe("buildNodes", () => {
     assert.deepEqual(div.children, [{ kind: "text", data: "<img src=x onerror=alert(1)>" }]);
   });
 
+  it("CA5/RN2: o gancho de ações roda só para elementos marcáveis", () => {
+    const mixed: CanvasNode[] = [
+      { t: "el", tag: "p", attrs: { "data-canvas-item": "a" }, c: [{ t: "text", v: "marcável" }] },
+      { t: "el", tag: "p", attrs: {}, c: [{ t: "text", v: "comum" }] },
+      { t: "el", tag: "div", attrs: { "data-canvas-item": "b" }, c: [{ t: "el", tag: "span", attrs: {}, c: [] }] },
+    ];
+    const seen: string[] = [];
+    buildNodes(mixed, fakeDocument(), (_element, id) => { seen.push(id); });
+    assert.deepEqual(seen, ["a", "b"]);
+    buildNodes(mixed, fakeDocument());
+  });
+
   it("formatTime devolve hora legível", () => {
     assert.match(formatTime(Date.UTC(2026, 0, 1, 12, 0, 0)), /\d{1,2}:\d{2}:\d{2}/);
   });

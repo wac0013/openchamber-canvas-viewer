@@ -2,7 +2,7 @@
 import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 
-// node_modules/@openchamber/sdk/dist/scrollbar-style.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/scrollbar-style.js
 var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
 var GUEST_SCROLLBAR_CSS = `
 :root {
@@ -62,12 +62,12 @@ function installGuestScrollbarActivity(doc) {
 }
 var GUEST_SCROLLBAR_SCRIPT = `(${installGuestScrollbarActivity.toString()})(document);`;
 
-// node_modules/@openchamber/sdk/dist/manifest.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/manifest.js
 var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
 var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
 var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
 
-// node_modules/@openchamber/sdk/dist/session-events.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/session-events.js
 var GUEST_SESSION_EVENT_TYPES = [
   "turn-finished",
   "turn-failed",
@@ -152,7 +152,7 @@ var readSessionEventRequest = (body) => {
   return request;
 };
 
-// node_modules/@openchamber/sdk/dist/service-host.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/service-host.js
 var SERVICE_HOST_PATH = "/service/call";
 var OPENCHAMBER_HOST_CALLBACK_URL_ENV = "OPENCHAMBER_HOST_CALLBACK_URL";
 var SERVICE_HOST_TIMEOUT_MS = 3e4;
@@ -209,7 +209,7 @@ var createServiceHost = ({ env }) => {
   };
 };
 
-// node_modules/@openchamber/sdk/dist/contract.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/contract.js
 var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
 var GUEST_GENERATE_LATE_KEEP_MS = 60 * 6e4;
 var HOST_REQUEST_ERROR_CODES = [
@@ -240,7 +240,7 @@ var hostRequestErrorCodeSet = new Set(HOST_REQUEST_ERROR_CODES);
 var serviceStatusSet = new Set(SERVICE_STATUS_VALUES);
 var fileStatKindSet = new Set(GUEST_FILE_STAT_KINDS);
 
-// node_modules/@openchamber/sdk/dist/service-providers.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/service-providers.js
 var BROWSER_CONTROL_ACTIONS = [
   "browser.open",
   "browser.snapshot",
@@ -262,7 +262,7 @@ var NOTIFICATIONS_PROVIDER_IDLE_MS = 10 * 6e4;
 var TRACKER_PROVIDER_IDLE_MS = 10 * 6e4;
 var QUOTA_PROVIDER_IDLE_MS = 10 * 6e4;
 
-// node_modules/@openchamber/sdk/dist/service-surface.js
+// ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/service-surface.js
 var SURFACE_CONTROLLERS = ["none", "agent", "user"];
 var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
 

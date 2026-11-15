@@ -1,10 +1,10 @@
 "use strict";
 (() => {
-  // node_modules/@openchamber/sdk/dist/api-version.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
   var OPENCHAMBER_SDK_API_VERSION = 1;
 
-  // node_modules/@openchamber/sdk/dist/scrollbar-style.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/scrollbar-style.js
   var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
   var GUEST_SCROLLBAR_CSS = `
 :root {
@@ -64,15 +64,15 @@
   }
   var GUEST_SCROLLBAR_SCRIPT = `(${installGuestScrollbarActivity.toString()})(document);`;
 
-  // node_modules/@openchamber/sdk/dist/workspace.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/workspace.js
   var GUEST_STORAGE_KEY_MAX = 128;
   var GUEST_STORAGE_VALUE_BYTES = 65536;
 
-  // node_modules/@openchamber/sdk/dist/shells.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/shells.js
   var GUEST_SHELL_ID_MAX = 128;
   var GUEST_SHELL_OUTPUT_TAIL_MAX = 65536;
 
-  // node_modules/@openchamber/sdk/dist/microphone.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/microphone.js
   var GUEST_MICROPHONE_SAMPLE_RATE_MIN = 8e3;
   var GUEST_MICROPHONE_SAMPLE_RATE_MAX = 192e3;
   var GUEST_MICROPHONE_OPEN_TIMEOUT_MS = 12e4;
@@ -118,7 +118,7 @@
     };
   };
 
-  // node_modules/@openchamber/sdk/dist/status-controls.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/status-controls.js
   var GUEST_STATUS_CONTROLS_MAX = 4;
   var GUEST_STATUS_CONTROL_ID = /^[a-z][a-z0-9-]{0,39}$/;
   var GUEST_STATUS_CONTROL_LABEL_MAX = 60;
@@ -161,12 +161,12 @@
     return true;
   };
 
-  // node_modules/@openchamber/sdk/dist/manifest.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/manifest.js
   var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
   var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
   var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
 
-  // node_modules/@openchamber/sdk/dist/session-events.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/session-events.js
   var GUEST_SESSION_EVENT_TYPES = [
     "turn-finished",
     "turn-failed",
@@ -180,11 +180,11 @@
   var SESSION_EVENTS_IDLE_MS = 10 * 6e4;
   var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
 
-  // node_modules/@openchamber/sdk/dist/service-host.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/service-host.js
   var SERVICE_SCHEDULE_IDLE_MS = 10 * 6e4;
   var MENTIONS_IDLE_MS = 10 * 6e4;
 
-  // node_modules/@openchamber/sdk/dist/file-editor.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/file-editor.js
   var GUEST_FILE_EDITOR_CONTENT_MAX = 2e7;
   var GUEST_FILE_EDITOR_VERSION_MAX = 256;
   var fileEditorPayloadSize = (value) => "bytes" in value ? value.bytes.byteLength : value.content.length;
@@ -203,7 +203,7 @@
     return true;
   };
 
-  // node_modules/@openchamber/sdk/dist/popover.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/popover.js
   var GUEST_POPOVER_ID = /^[A-Za-z0-9_-]{1,80}$/;
   var GUEST_POPOVER_COORDINATE_MAX = 1e5;
   var GUEST_POPOVER_WIDTH_MIN = 160;
@@ -246,7 +246,7 @@
     }
   };
 
-  // node_modules/@openchamber/sdk/dist/contract.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/contract.js
   var GUEST_BLOCK_ANSWER_MAX = 2e3;
   var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
   var isStartSessionResult = (value) => Boolean(value && "sessionId" in value);
@@ -465,7 +465,7 @@
     return wire;
   };
 
-  // node_modules/@openchamber/sdk/dist/host.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/host.js
   var isKeyEvent = (event) => "key" in event && "metaKey" in event && "ctrlKey" in event;
   var isSaveShortcut = (event) => (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s";
   var HostRequestError = class extends Error {
@@ -1551,7 +1551,7 @@
     };
   };
 
-  // node_modules/@openchamber/sdk/dist/service-providers.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/service-providers.js
   var BROWSER_CONTROL_ACTIONS = [
     "browser.open",
     "browser.snapshot",
@@ -1573,11 +1573,11 @@
   var TRACKER_PROVIDER_IDLE_MS = 10 * 6e4;
   var QUOTA_PROVIDER_IDLE_MS = 10 * 6e4;
 
-  // node_modules/@openchamber/sdk/dist/service-surface.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/service-surface.js
   var SURFACE_CONTROLLERS = ["none", "agent", "user"];
   var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
 
-  // node_modules/@openchamber/sdk/dist/ui/theme.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/ui/theme.js
   var TOKEN_VARS = [
     ["--oc-bg", "background"],
     ["--oc-elevated", "elevated"],
@@ -1667,7 +1667,7 @@
     }
   };
 
-  // node_modules/@openchamber/sdk/dist/ui/style.js
+  // ../openchamber-canvas-viewer-U1/node_modules/@openchamber/sdk/dist/ui/style.js
   var OC_ALIAS = {
     "surface-background": "bg",
     "surface-elevated": "elevated",
@@ -1991,6 +1991,165 @@ ${GUEST_UI_LOOK_CSS}`;
     itemTextChars: 16e3
   };
   var BLOCKED_NOTES_MAX = 20;
+  var CHIP_PROVIDER_ID = "canvas-viewer";
+  var CHIP_URL = "https://github.com/wac0013/openchamber-canvas-viewer";
+  var TRUNCATED_NOTICE = "\n[conte\xFAdo truncado]";
+
+  // src/canvas/context.ts
+  var BLOCK_TAGS = /* @__PURE__ */ new Set([
+    "div",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "dl",
+    "dt",
+    "dd",
+    "table",
+    "caption",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "blockquote",
+    "pre",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "figure",
+    "figcaption",
+    "details",
+    "summary",
+    "hr"
+  ]);
+  function plainText(nodes) {
+    let out = "";
+    const lineBreak = () => {
+      if (out !== "" && !out.endsWith("\n")) out += "\n";
+    };
+    const walk = (list, inPre) => {
+      for (const node of list) {
+        if (node.t === "text") {
+          const value = inPre ? node.v : node.v.replace(/\s+/g, " ");
+          out += !inPre && (out === "" || /[\n ]$/.test(out)) ? value.replace(/^ /, "") : value;
+          continue;
+        }
+        const block = BLOCK_TAGS.has(node.tag);
+        if (block) lineBreak();
+        if (node.tag === "br") {
+          out += "\n";
+          continue;
+        }
+        if (node.tag === "li") out += "- ";
+        const itemId = node.attrs["data-canvas-item"];
+        if (itemId) out += `[#${itemId}] `;
+        walk(node.c, inPre || node.tag === "pre");
+        if ((node.tag === "td" || node.tag === "th") && !out.endsWith("\n")) out += " | ";
+        if (block) lineBreak();
+      }
+    };
+    walk(nodes, false);
+    return out.split("\n").map((line) => line.replace(/[ \t]+$/g, "").replace(/ \|$/, "")).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function findItem(nodes, id) {
+    for (const node of nodes) {
+      if (node.t !== "el") continue;
+      if (node.attrs["data-canvas-item"] === id) return node;
+      const inner = findItem(node.c, id);
+      if (inner) return inner;
+    }
+    return null;
+  }
+  function truncateContext(text, max = LIMITS.itemTextChars) {
+    if (text.length <= max) return { text, truncated: false };
+    let cut = text.slice(0, max - TRUNCATED_NOTICE.length);
+    const last = cut.charCodeAt(cut.length - 1);
+    if (last >= 55296 && last <= 56319) cut = cut.slice(0, -1);
+    return { text: cut + TRUNCATED_NOTICE, truncated: true };
+  }
+  function buildChip(canvas, target) {
+    const title = canvas.title || "Canvas";
+    if (target.kind === "canvas") {
+      const body2 = [`Canvas: ${title}`, `Atualizado: ${new Date(canvas.updatedAt).toISOString()}`, "---", plainText(canvas.tree)].join("\n");
+      const { text: text2, truncated: truncated2 } = truncateContext(body2);
+      return {
+        truncated: truncated2,
+        chip: { providerId: CHIP_PROVIDER_ID, id: "canvas", title, url: CHIP_URL, text: text2, data: { v: 1, kind: "canvas" } }
+      };
+    }
+    const item = findItem(canvas.tree, target.id);
+    if (!item) return null;
+    const body = [`Canvas: ${title}`, `Elemento: ${target.id}`, "---", plainText(item.c)].join("\n");
+    const { text, truncated } = truncateContext(body);
+    return {
+      truncated,
+      chip: { providerId: CHIP_PROVIDER_ID, id: `item-${target.id}`, title: `${title} \u203A ${target.id}`, url: CHIP_URL, text, data: { v: 1, kind: "item", itemId: target.id } }
+    };
+  }
+
+  // src/canvas/actions.ts
+  var FAILURE_MESSAGES = {
+    "no-canvas": "N\xE3o h\xE1 canvas para adicionar.",
+    "session-changed": "A sess\xE3o em foco mudou. Nada foi enviado para a caixa de mensagem desta sess\xE3o.",
+    "item-missing": "O elemento n\xE3o existe mais no canvas atual.",
+    "empty-comment": "Escreva o coment\xE1rio antes de confirmar.",
+    "comment-too-long": `O coment\xE1rio passa de ${LIMITS.itemTextChars} caracteres.`,
+    "host-error": "O OpenChamber recusou a a\xE7\xE3o. Tente de novo."
+  };
+  function ownedByFocus(snapshot) {
+    return snapshot.current !== null && snapshot.shown !== null && snapshot.shown.owner === snapshot.current;
+  }
+  function createActions(host2, read) {
+    const before = () => {
+      const snapshot = read();
+      if (snapshot.shown === null) return "no-canvas";
+      if (!ownedByFocus(snapshot)) return "session-changed";
+      return { owner: snapshot.current, shown: snapshot.shown };
+    };
+    return {
+      async addToContext(target) {
+        const state = before();
+        if (typeof state === "string") return { ok: false, reason: state };
+        const built = buildChip(state.shown, target);
+        if (!built) return { ok: false, reason: "item-missing" };
+        try {
+          await host2.attach(built.chip);
+        } catch {
+          return { ok: false, reason: "host-error" };
+        }
+        return { ok: true, truncated: built.truncated };
+      },
+      async comment(itemId, text) {
+        const comment = text.trim();
+        if (!comment) return { ok: false, reason: "empty-comment" };
+        if (comment.length > LIMITS.itemTextChars) return { ok: false, reason: "comment-too-long" };
+        const state = before();
+        if (typeof state === "string") return { ok: false, reason: state };
+        const built = buildChip(state.shown, { kind: "item", id: itemId });
+        if (!built) return { ok: false, reason: "item-missing" };
+        try {
+          await host2.attach(built.chip);
+        } catch {
+          return { ok: false, reason: "host-error" };
+        }
+        const after = read();
+        if (!ownedByFocus(after) || after.current !== state.owner) return { ok: false, reason: "session-changed", attached: true };
+        try {
+          await host2.compose({ text: comment, mode: "append" });
+        } catch {
+          return { ok: false, reason: "host-error", attached: true };
+        }
+        return { ok: true, truncated: built.truncated };
+      }
+    };
+  }
 
   // src/canvas/sanitize.ts
   var ALLOWED_TAGS = /* @__PURE__ */ new Set([
@@ -2149,7 +2308,7 @@ ${GUEST_UI_LOOK_CSS}`;
   }
 
   // src/canvas/view.ts
-  function buildNodes(nodes, doc = document) {
+  function buildNodes(nodes, doc = document, onItem) {
     const fragment = doc.createDocumentFragment();
     for (const node of nodes) {
       if (node.t === "text") {
@@ -2161,7 +2320,9 @@ ${GUEST_UI_LOOK_CSS}`;
         if (name === "class") element.className = value.split(" ").map((token) => `cv-${token}`).join(" ");
         else element.setAttribute(name, value);
       }
-      element.append(buildNodes(node.c, doc));
+      element.append(buildNodes(node.c, doc, onItem));
+      const itemId = node.attrs["data-canvas-item"];
+      if (itemId && onItem) onItem(element, itemId);
       fragment.append(element);
     }
     return fragment;
@@ -2173,75 +2334,140 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/main.ts
   var POLL_MS = 1500;
   var host = connectHost();
-  function rootElement() {
-    const element = document.getElementById("app");
-    if (!element) throw new Error("Canvas Viewer: elemento #app n\xE3o encontrado no painel");
+  function required(id) {
+    const element = document.getElementById(id);
+    if (!element) throw new Error(`Canvas Viewer: elemento #${id} n\xE3o encontrado no painel`);
     return element;
   }
-  var app = rootElement();
+  var top = required("top");
+  var scroll = required("scroll");
+  var commentBar = required("comment-bar");
   var sessionId = null;
   var view = { kind: "no-session" };
+  var viewOwner = null;
   var lastSignature = "";
   var lastRendered = "";
   var requestSeq = 0;
   var inflightFor = null;
   var dirty = false;
   var polling;
+  var draft = null;
   function el2(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
     if (text !== void 0) node.textContent = text;
     return node;
   }
+  function button2(label, title, onClick) {
+    const node = el2("button", "ui-btn", label);
+    node.type = "button";
+    node.title = title;
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return node;
+  }
   function banner(kind, text) {
     return el2("div", `banner ${kind}`, text);
   }
-  function emptyMessage(text) {
-    return el2("div", "empty", text);
+  var actions = createActions(host, () => ({
+    current: sessionId,
+    shown: view.kind === "canvas" && viewOwner ? { owner: viewOwner, title: view.title, updatedAt: view.updatedAt, tree: view.tree } : null
+  }));
+  function report(result, done) {
+    if (result.ok) {
+      void host.toast({ kind: "success", message: result.truncated ? `${done} (conte\xFAdo truncado)` : done }).catch(() => {
+      });
+      return;
+    }
+    const extra = result.attached ? " O chip j\xE1 estava na caixa; o texto n\xE3o foi escrito." : "";
+    void host.toast({ kind: "error", message: `${FAILURE_MESSAGES[result.reason]}${extra}` }).catch(() => {
+    });
+  }
+  function closeComment() {
+    draft = null;
+    commentBar.hidden = true;
+    commentBar.replaceChildren();
+  }
+  function openComment(itemId) {
+    if (view.kind !== "canvas" || !viewOwner || viewOwner !== sessionId || !findItem(view.tree, itemId)) return;
+    draft = { owner: viewOwner, itemId, text: "" };
+    const input = el2("textarea", "ui-input");
+    input.maxLength = LIMITS.itemTextChars;
+    input.rows = 3;
+    input.placeholder = "Escreva o coment\xE1rio para o agente";
+    input.addEventListener("input", () => {
+      if (draft) draft.text = input.value;
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeComment();
+    });
+    const confirm = button2("Adicionar \xE0 mensagem", "Escreve o coment\xE1rio na caixa de mensagem, sem enviar", () => {
+      const current = draft;
+      if (!current) return;
+      void actions.comment(current.itemId, current.text).then((result) => {
+        report(result, "Coment\xE1rio adicionado \xE0 caixa de mensagem");
+        if (result.ok || result.reason === "session-changed") closeComment();
+      });
+    });
+    confirm.classList.add("primary");
+    commentBar.replaceChildren(el2("div", "ui-label", `Comentando o elemento ${itemId}`), input, el2("div", "ui-row"));
+    commentBar.lastElementChild?.append(confirm, button2("Cancelar", "Descarta o coment\xE1rio", closeComment));
+    commentBar.hidden = false;
+    input.focus();
+  }
+  function decorateItem(element, id) {
+    element.tabIndex = 0;
+    const box = el2("span", "ui-actions");
+    box.append(
+      button2("+ Contexto", "Adicionar este elemento ao contexto do chat", () => void actions.addToContext({ kind: "item", id }).then((r) => report(r, "Elemento adicionado ao contexto"))),
+      button2("Comentar", "Comentar este elemento", () => openComment(id))
+    );
+    element.append(box);
   }
   function render() {
     const key = JSON.stringify(view);
     if (key === lastRendered) return;
     lastRendered = key;
-    const previousScroll = document.getElementById("scroll");
-    const scrollTop = previousScroll?.scrollTop ?? 0;
-    const root = el2("div");
-    root.id = "app-inner";
-    root.style.cssText = "display:flex;flex-direction:column;height:100%";
-    const body = el2("div");
-    body.id = "scroll";
+    const head = [];
+    const body = [];
     switch (view.kind) {
       case "no-session":
-        body.append(emptyMessage("Abra uma sess\xE3o para ver o canvas dela."));
+        body.push(el2("div", "empty", "Abra uma sess\xE3o para ver o canvas dela."));
         break;
       case "loading":
-        body.append(emptyMessage("Carregando\u2026"));
+        body.push(el2("div", "empty", "Carregando\u2026"));
         break;
       case "failed":
-        root.append(banner("error", `N\xE3o foi poss\xEDvel mostrar o canvas: ${view.message}`));
+        head.push(banner("error", `N\xE3o foi poss\xEDvel mostrar o canvas: ${view.message}`));
         break;
       case "empty":
-        if (view.error) root.append(banner("error", `Publica\xE7\xE3o recusada: ${view.error.message}`));
-        body.append(emptyMessage("Nenhum canvas foi criado nesta sess\xE3o."));
+        if (view.error) head.push(banner("error", `Publica\xE7\xE3o recusada: ${view.error.message}`));
+        body.push(el2("div", "empty", "Nenhum canvas foi criado nesta sess\xE3o."));
         break;
       case "canvas": {
         const header = el2("header");
-        header.append(el2("h1", void 0, view.title || "Canvas"), el2("time", void 0, `Atualizado \xE0s ${formatTime(view.updatedAt)}`));
-        root.append(header);
-        if (view.outdatedService) root.append(banner("warning", "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions."));
-        if (view.error) root.append(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
-        if (view.blocked.length) root.append(banner("warning", `Conte\xFAdo bloqueado e removido: ${view.blocked.join(", ")}.`));
+        header.append(
+          el2("h1", void 0, view.title || "Canvas"),
+          el2("time", void 0, `Atualizado \xE0s ${formatTime(view.updatedAt)}`),
+          button2("+ Contexto", "Adicionar o canvas inteiro ao contexto do chat", () => void actions.addToContext({ kind: "canvas" }).then((r) => report(r, "Canvas adicionado ao contexto")))
+        );
+        head.push(header);
+        if (view.outdatedService) head.push(banner("warning", "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions."));
+        if (view.error) head.push(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
+        if (view.blocked.length) head.push(banner("warning", `Conte\xFAdo bloqueado e removido: ${view.blocked.join(", ")}.`));
         const content = el2("div", "cv");
-        content.append(buildNodes(view.tree));
-        body.append(content);
+        content.append(buildNodes(view.tree, document, decorateItem));
+        body.push(content);
         break;
       }
     }
-    root.append(body);
-    app.replaceChildren(root);
+    top.replaceChildren(...head);
+    scroll.replaceChildren(...body);
     if (view.kind === "canvas") {
       const signature = structureSignature(view.tree);
-      body.scrollTop = signature === lastSignature ? scrollTop : 0;
+      if (signature !== lastSignature) scroll.scrollTop = 0;
       lastSignature = signature;
     } else {
       lastSignature = "";
@@ -2270,6 +2496,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (seq === requestSeq && asked === sessionId) {
       if (!(next.kind === "failed" && view.kind === "canvas")) {
         view = next;
+        viewOwner = asked;
         render();
       }
       if (again) void refresh();
@@ -2281,7 +2508,9 @@ ${GUEST_UI_LOOK_CSS}`;
     requestSeq += 1;
     inflightFor = null;
     dirty = false;
+    if (draft && draft.owner !== next) closeComment();
     view = next ? { kind: "loading" } : { kind: "no-session" };
+    viewOwner = next;
     render();
     void refresh();
   }

@@ -31,7 +31,8 @@ npm test             # node --test "tests/**/*.test.ts"
 
 ```
 src/shared/    contrato (payload, limites, versões)
-src/canvas/    sanitize.ts (leitor estrito → árvore), snapshot.ts, panel-state.ts, view.ts
+src/canvas/    sanitize.ts (leitor estrito → árvore), snapshot.ts, panel-state.ts, view.ts,
+               context.ts (texto + chip), actions.ts (adicionar/comentar, fail-closed de sessão)
 src/main.ts    painel (casca)
 service/       main.ts (casca HTTP), inbox.ts (caixa de entrada), store.ts (persistência por sessão), paths.ts
 plugin/        index.ts — ferramenta canvas_publish no OpenCode (conhece context.sessionID)
@@ -48,6 +49,7 @@ Fluxo: agente → `canvas_publish` (plugin) → arquivo na caixa de entrada → 
 - Conteúdo de canvas é gerado por agente: **entrada não confiável** em todo ponto de entrada. Nunca remover validação/sanitização nos limites de confiança.
 - Painel: nunca `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`/`eval` (há teste que falha se aparecer).
 - O plugin do OpenCode não pode importar pacotes externos: o build embute tudo (só `node:*` fica de fora).
+- Ações que escrevem no chat (`host.attach`/`host.compose`) passam por `src/canvas/actions.ts`, que confere a sessão em foco imediatamente antes de cada chamada. Nunca chamar o host direto da casca do painel.
 - Segredos nunca no repositório.
 
 ## Convenções

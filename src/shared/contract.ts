@@ -53,3 +53,10 @@ export type InboxFile = { v: typeof INBOX_SCHEMA_VERSION; sessionId: string; tit
 
 /** Máximo de avisos de bloqueio guardados por canvas. */
 export const BLOCKED_NOTES_MAX = 20;
+
+/** Identidade dos chips no composer (`providerId` + `id` substitui o chip anterior). */
+export const CHIP_PROVIDER_ID = "canvas-viewer";
+/** O host exige um `url` não vazio no chip; esta página só descreve a extensão. */
+export const CHIP_URL = "https://github.com/wac0013/openchamber-canvas-viewer";
+/** Aviso final quando o contexto passa do limite do composer (RN4 da história de contexto). */
+export const TRUNCATED_NOTICE = "\n[conteúdo truncado]";

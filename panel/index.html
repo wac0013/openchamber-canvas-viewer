@@ -9,13 +9,28 @@
       html, body { margin: 0; padding: 0; height: 100%; }
       body { background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); font-size: 12px; line-height: 1.45; }
       #app { display: flex; flex-direction: column; height: 100%; }
-      header { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--oc-border); flex: none; }
+      header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--oc-border); flex: none; }
       header h1 { font-size: 12px; font-weight: 600; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       header time { color: var(--oc-muted); font-size: 11px; white-space: nowrap; }
       .banner { margin: 6px 10px 0; padding: 5px 8px; border-radius: var(--oc-radius, 6px); border: 1px solid var(--oc-border); font-size: 11px; flex: none; }
       .banner.error { border-color: var(--oc-error); color: var(--oc-error-text, var(--oc-error)); }
       .banner.warning { border-color: var(--oc-warning); }
+      #top { flex: none; }
       #scroll { flex: 1; overflow: auto; padding: 8px 10px 24px; }
+      #comment-bar { flex: none; border-top: 1px solid var(--oc-border); padding: 8px 10px; background: var(--oc-elevated); }
+      #comment-bar[hidden] { display: none; }
+
+      /* Controles do próprio painel (prefixo ui-): nunca vêm do agente. */
+      .ui-btn { font: inherit; font-size: 11px; color: inherit; background: transparent; border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 1px 6px; cursor: pointer; white-space: nowrap; }
+      .ui-btn:hover { background: var(--oc-hover); }
+      .ui-btn.primary { background: var(--oc-primary); color: var(--oc-primary-fg); border-color: transparent; }
+      .ui-input { width: 100%; font: inherit; color: inherit; background: var(--oc-bg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 4px 6px; resize: vertical; }
+      .ui-label { color: var(--oc-muted); font-size: 11px; margin-bottom: 4px; }
+      .ui-row { display: flex; gap: 6px; margin-top: 6px; }
+      .ui-actions { display: none; position: absolute; top: 2px; right: 2px; gap: 4px; z-index: 1; }
+      .cv [data-canvas-item] { position: relative; outline: 1px dashed transparent; }
+      .cv [data-canvas-item]:hover, .cv [data-canvas-item]:focus-within { outline-color: var(--oc-border); }
+      .cv [data-canvas-item]:hover > .ui-actions, .cv [data-canvas-item]:focus-within > .ui-actions { display: inline-flex; }
       .empty { color: var(--oc-muted); text-align: center; padding: 32px 12px; }
 
       /* Conteúdo do agente: tudo sob .cv; classes do agente chegam prefixadas com "cv-". */
@@ -32,7 +47,6 @@
       .cv hr { border: 0; border-top: 1px solid var(--oc-border); margin: 10px 0; }
       .cv details { margin: 6px 0; } .cv summary { cursor: pointer; }
       .cv mark { background: var(--oc-selection); color: inherit; }
-      .cv [data-canvas-item] { border-radius: 4px; }
       .cv-card { border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 8px 10px; margin: 6px 0; background: var(--oc-elevated); }
       .cv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
       .cv-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
@@ -45,7 +59,11 @@
     </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="top"></div>
+      <div id="scroll"></div>
+      <div id="comment-bar" hidden></div>
+    </div>
     <script src="main.js"></script>
   </body>
 </html>

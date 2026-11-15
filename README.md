@@ -37,6 +37,31 @@ Requer OpenChamber ≥ 2.6.1.
 
 Tudo o que é executável, remoto ou de navegação é **removido** (o resto do canvas continua) e o painel e o agente são avisados do que saiu: `script`, `style`, `iframe`, `svg`, `img`, `a`/`href`, formulários, `on*`, `src`, `style=…`. HTML malformado (tag sem fechar, aninhamento > 32, > 5 000 nós, > 200 000 caracteres…) é **recusado por inteiro**: o canvas anterior permanece e o painel mostra o motivo.
 
+## Devolver o canvas ao chat
+
+Tudo usa o **chip nativo** da caixa de mensagem do OpenChamber (mesmo visual e mesma remoção das outras extensões) e **nada é enviado sozinho**: o chip e o texto ficam na caixa até você enviar ou remover.
+
+| Ação | Onde | Resultado |
+| --- | --- | --- |
+| **+ Contexto** (canvas inteiro) | cabeçalho do painel | chip com o título do canvas; o agente recebe o conteúdo em texto estruturado |
+| **+ Contexto** (elemento) | passe o cursor ou foque (Tab) num elemento marcado pelo agente com `data-canvas-item` | chip com o id do elemento; o agente recebe só o conteúdo dele |
+| **Comentar** | no mesmo elemento | abre um campo; ao confirmar, anexa o chip do elemento e escreve o comentário na caixa (modo *append*) |
+
+- Só elementos marcados pelo agente oferecem ações; o canvas inteiro sempre pode ser adicionado.
+- O contexto é **texto puro**: marcação que aparecer no conteúdo chega literalmente, nunca renderizada nem executada.
+- Acima de 16 000 caracteres o texto é cortado e termina com `[conteúdo truncado]`.
+- Adicionar o mesmo elemento de novo **substitui** o chip anterior (um chip por elemento).
+- **Sessão correta:** a ação só acontece enquanto a sessão dona do canvas exibido é a sessão em foco. Se a sessão mudou, nada é escrito e o painel avisa. Trocar de sessão descarta o comentário em edição.
+
+Formato do texto que o agente recebe (elemento):
+
+```
+Canvas: <título>
+Elemento: <id>
+---
+<conteúdo em texto>
+```
+
 ## Segurança
 
 - O conteúdo do canvas é entrada não confiável. Ele passa por um leitor estrito que produz uma árvore de dados — nunca HTML cru — validada no plugin, no serviço (ao receber e ao ler do disco) e no painel.
@@ -57,13 +82,19 @@ npm test
 
 Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estrito; os `.js` são artefatos de build).
 
-### Limitações conhecidas (v0.1)
+### Limitações conhecidas
 
 - A reconciliação de canvases órfãos (sessão excluída com a extensão desligada) não existe; o evento de exclusão só é entregue com a extensão ativa.
 - Sessões dentro de espaços isolados (containers) não carregam plugins do host; nelas `canvas_publish` não existe.
+- O chip e o texto são escritos no composer **visível** no momento da chamada (`attach`/`compose` do host gravam num slot que o composer montado consome na hora); por isso a extensão confere a sessão imediatamente antes de cada chamada. Se o host mudar esse comportamento, a verificação de sessão correta precisa ser refeita.
 - Se o OpenCode não foi iniciado pelo OpenChamber, o plugin só carrega pelo botão *Add to global config* da extensão (comportamento do host).
 
 ## Changelog
+
+### 0.2.0
+- Adicionar ao contexto o canvas inteiro ou um elemento marcável (chip nativo, texto estruturado, truncamento em 16 000 com aviso).
+- Comentar um elemento: chip do elemento + comentário na caixa de mensagem, sem envio automático.
+- Guardas fail-closed de sessão: nada é escrito se a sessão em foco não for a dona do canvas.
 
 ### 0.1.0
 - Painel Canvas com um canvas por sessão, atualizado em tempo real.

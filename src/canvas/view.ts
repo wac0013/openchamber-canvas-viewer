@@ -1,10 +1,15 @@
-// Desenho do canvas: constrói DOM só a partir da árvore já sanitizada (createElement /
-// textContent). Nunca usa innerHTML com texto do agente.
+/**
+ * Desenho do canvas: constrói DOM só a partir da árvore já sanitizada (createElement /
+ * textContent). Nunca usa innerHTML com texto do agente.
+ */
 
 import type { CanvasNode } from "../shared/contract.ts";
 
-/** Classes do agente ganham o prefixo `cv-`: não colidem com a interface do painel. */
-export function buildNodes(nodes: readonly CanvasNode[], doc: Document = document): DocumentFragment {
+/** Chamado uma vez para cada elemento marcável criado; só esses elementos recebem ações (RN2). */
+export type ItemHook = (element: HTMLElement, id: string) => void;
+
+/** Classes do agente ganham o prefixo `cv-`: não colidem com a interface do painel (`ui-*`). */
+export function buildNodes(nodes: readonly CanvasNode[], doc: Document = document, onItem?: ItemHook): DocumentFragment {
   const fragment = doc.createDocumentFragment();
   for (const node of nodes) {
     if (node.t === "text") {
@@ -16,7 +21,9 @@ export function buildNodes(nodes: readonly CanvasNode[], doc: Document = documen
       if (name === "class") element.className = value.split(" ").map((token) => `cv-${token}`).join(" ");
       else element.setAttribute(name, value);
     }
-    element.append(buildNodes(node.c, doc));
+    element.append(buildNodes(node.c, doc, onItem));
+    const itemId = node.attrs["data-canvas-item"];
+    if (itemId && onItem) onItem(element, itemId);
     fragment.append(element);
   }
   return fragment;
