@@ -180,12 +180,12 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
       continue;
     }
 
+    if (stack.length + 1 > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
     count();
     const element: CanvasElement = { t: "el", tag: name, attrs: readAttributes(opening[2] ?? "", name), c: [] };
     children().push(element);
     if (VOID_TAGS.has(name) || opening[3] === "/") continue;
     stack.push(element);
-    if (stack.length > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
   }
 
   const open = stack[stack.length - 1];

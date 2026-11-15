@@ -2185,6 +2185,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var lastRendered = "";
   var requestSeq = 0;
   var inflightFor = null;
+  var dirty = false;
   var polling;
   function el2(tag, className, text) {
     const node = document.createElement(tag);
@@ -2247,7 +2248,11 @@ ${GUEST_UI_LOOK_CSS}`;
     }
   }
   async function refresh() {
-    if (!sessionId || inflightFor === sessionId) return;
+    if (!sessionId) return;
+    if (inflightFor === sessionId) {
+      dirty = true;
+      return;
+    }
     const asked = sessionId;
     const seq = ++requestSeq;
     inflightFor = asked;
@@ -2260,16 +2265,22 @@ ${GUEST_UI_LOOK_CSS}`;
     } finally {
       if (inflightFor === asked) inflightFor = null;
     }
-    if (seq !== requestSeq || asked !== sessionId) return;
-    if (next.kind === "failed" && view.kind === "canvas") return;
-    view = next;
-    render();
+    const again = dirty;
+    dirty = false;
+    if (seq === requestSeq && asked === sessionId) {
+      if (!(next.kind === "failed" && view.kind === "canvas")) {
+        view = next;
+        render();
+      }
+      if (again) void refresh();
+    }
   }
   function setSession(next) {
     if (next === sessionId) return;
     sessionId = next;
     requestSeq += 1;
     inflightFor = null;
+    dirty = false;
     view = next ? { kind: "loading" } : { kind: "no-session" };
     render();
     void refresh();

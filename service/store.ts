@@ -81,8 +81,13 @@ export function createStore(dataDir: string): Store {
     await mkdir(dir, { recursive: true });
     const target = fileOf(record.sessionId);
     const tmp = `${target}.${randomUUID()}.tmp`;
-    await writeFile(tmp, JSON.stringify(record), "utf8");
-    await rename(tmp, target);
+    try {
+      await writeFile(tmp, JSON.stringify(record), "utf8");
+      await rename(tmp, target);
+    } catch (error) {
+      await rm(tmp, { force: true });
+      throw error;
+    }
   };
 
   const outdated = (sessionId: string, options?: PublishOptions): boolean =>

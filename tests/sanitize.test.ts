@@ -158,6 +158,26 @@ describe("parseCanvasHtml — endurecimentos da revisão", () => {
   });
 });
 
+describe("parseCanvasHtml — fronteira de profundidade com tags void e autofechadas", () => {
+  const open = (n: number, tail: string) => "<div>".repeat(n) + tail + "</div>".repeat(n);
+
+  it("o que o parser aceita, o validateTree também aceita (para qualquer tipo de folha)", () => {
+    for (const tail of ["x", "<br>", "<hr/>", "<span/>", "<p></p>"]) {
+      for (const n of [LIMITS.depth - 2, LIMITS.depth - 1, LIMITS.depth, LIMITS.depth + 1]) {
+        const parsed = parseCanvasHtml(open(n, tail));
+        if (parsed.ok) assert.notEqual(validateTree(parsed.tree), null, `${tail} em ${n}`);
+      }
+    }
+  });
+
+  it("folha void ou autofechada no nível 33 é recusada pelo parser (não passa para o disco)", () => {
+    assert.equal(parseCanvasHtml(open(LIMITS.depth, "<br>")).ok, false);
+    assert.equal(parseCanvasHtml(open(LIMITS.depth, "<hr/>")).ok, false);
+    assert.equal(parseCanvasHtml(open(LIMITS.depth, "<span/>")).ok, false);
+    assert.equal(parseCanvasHtml(open(LIMITS.depth - 1, "<br>")).ok, true);
+  });
+});
+
 describe("validateTree — segunda fronteira de confiança", () => {
   const good = [{ t: "el", tag: "p", attrs: { class: "a", "data-canvas-item": "x" }, c: [{ t: "text", v: "oi" }] }];
 

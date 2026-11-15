@@ -127,6 +127,16 @@ describe("drainInbox", () => {
     assert.deepEqual(await readdir(inbox), []);
   });
 
+  it("erro persistente: depois de 5 tentativas a publicação é registrada como recusada e a caixa esvazia", async () => {
+    const real = createStore(root);
+    const broken: Store = { ...real, publish: async () => { throw new Error("disco cheio"); } };
+    await drainInbox(inbox, broken, () => 1);
+    await deposit("ses_persist.json", valid("ses_persist"));
+    for (let i = 0; i < 5; i++) await drainInbox(inbox, broken, () => 10 + i);
+    assert.deepEqual(await readdir(inbox), []);
+    assert.match((await real.read("ses_persist"))?.error?.message ?? "", /erro de disco/);
+  });
+
   it("versão mais nova depositada durante a falha vence a devolvida", async () => {
     const real = createStore(root);
     const flaky: Store = {

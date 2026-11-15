@@ -39,7 +39,11 @@ function authorized(header: string | undefined): boolean {
 
 function send(response: http.ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body) });
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    ...(status === 413 ? { connection: "close" } : {}),
+  });
   response.end(body);
 }
 
@@ -49,10 +53,13 @@ function readBody(request: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let rejected = false;
     request.on("data", (chunk: Buffer) => {
+      if (rejected) return;
       size += chunk.length;
       if (size > BODY_MAX_BYTES) {
-        request.destroy();
+        rejected = true;
+        chunks.length = 0;
         reject(new BodyTooLarge());
         return;
       }

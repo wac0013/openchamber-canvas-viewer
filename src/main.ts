@@ -24,6 +24,7 @@ let lastSignature = "";
 let lastRendered = "";
 let requestSeq = 0;
 let inflightFor: string | null = null;
+let dirty = false;
 let polling: ReturnType<typeof setInterval> | undefined;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -101,7 +102,11 @@ function render(): void {
  * na tela mantém o canvas (e a rolagem) em vez de trocá-lo por um erro.
  */
 async function refresh(): Promise<void> {
-  if (!sessionId || inflightFor === sessionId) return;
+  if (!sessionId) return;
+  if (inflightFor === sessionId) {
+    dirty = true;
+    return;
+  }
   const asked = sessionId;
   const seq = ++requestSeq;
   inflightFor = asked;
@@ -114,10 +119,15 @@ async function refresh(): Promise<void> {
   } finally {
     if (inflightFor === asked) inflightFor = null;
   }
-  if (seq !== requestSeq || asked !== sessionId) return;
-  if (next.kind === "failed" && view.kind === "canvas") return;
-  view = next;
-  render();
+  const again = dirty;
+  dirty = false;
+  if (seq === requestSeq && asked === sessionId) {
+    if (!(next.kind === "failed" && view.kind === "canvas")) {
+      view = next;
+      render();
+    }
+    if (again) void refresh();
+  }
 }
 
 function setSession(next: string | null): void {
@@ -125,6 +135,7 @@ function setSession(next: string | null): void {
   sessionId = next;
   requestSeq += 1;
   inflightFor = null;
+  dirty = false;
   view = next ? { kind: "loading" } : { kind: "no-session" };
   render();
   void refresh();

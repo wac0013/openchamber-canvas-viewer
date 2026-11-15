@@ -284,12 +284,14 @@ var BLOCKED_NOTES_MAX = 20;
 
 // service/inbox.ts
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { link, lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 var FILE_NAME = /^([A-Za-z0-9_-]{1,128})\.json$/;
 var CLAIMED_NAME = /^([A-Za-z0-9_-]{1,128})\.json\.[0-9a-f-]{36}\.proc$/;
 var MAX_FILE_BYTES = LIMITS.htmlChars * 6 + 4096;
 var STALE_CLAIM_MS = 6e4;
+var MAX_ATTEMPTS = 5;
+var attempts = /* @__PURE__ */ new Map();
 async function readPayload(file, sessionId) {
   const info = await lstat(file);
   if (!info.isFile()) return { ok: false, message: "a publica\xE7\xE3o n\xE3o \xE9 um arquivo comum" };
@@ -329,26 +331,31 @@ async function drainInbox(inbox2, store2, now, options = {}) {
       const payload = await readPayload(claimed, sessionId);
       const record = payload.ok ? await store2.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation }) : await store2.reject(sessionId, payload.message, now(), { expectedGeneration: generation });
       if (record) changed.push(sessionId);
-      await rm(claimed, { force: true });
+      attempts.delete(sessionId);
+      await rm(claimed, { force: true, recursive: true });
     } catch (error) {
       options.onError?.(sessionId, error);
-      await giveBack(claimed, file);
+      const tried = (attempts.get(sessionId) ?? 0) + 1;
+      if (tried >= MAX_ATTEMPTS) {
+        attempts.delete(sessionId);
+        await rm(claimed, { force: true, recursive: true });
+        await store2.reject(sessionId, "n\xE3o foi poss\xEDvel gravar a publica\xE7\xE3o (erro de disco)", now(), { expectedGeneration: generation }).catch(() => null);
+      } else {
+        attempts.set(sessionId, tried);
+        await giveBack(claimed, file);
+      }
     }
   }
   return changed;
 }
 async function giveBack(claimed, file) {
-  try {
-    await lstat(file);
-    await rm(claimed, { force: true });
-  } catch {
-    await rename(claimed, file).catch(() => rm(claimed, { force: true }));
-  }
+  await link(claimed, file).catch(() => void 0);
+  await rm(claimed, { force: true, recursive: true });
 }
 async function dropStaleClaim(claimed, now) {
   try {
     const info = await lstat(claimed);
-    if (now - info.mtimeMs > STALE_CLAIM_MS) await rm(claimed, { force: true });
+    if (now - info.mtimeMs > STALE_CLAIM_MS) await rm(claimed, { force: true, recursive: true });
   } catch {
     return;
   }
@@ -573,12 +580,12 @@ function parseOrThrow(html, blocked) {
       block(`<${name}>`);
       continue;
     }
+    if (stack.length + 1 > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
     count();
     const element = { t: "el", tag: name, attrs: readAttributes(opening[2] ?? "", name), c: [] };
     children().push(element);
     if (VOID_TAGS.has(name) || opening[3] === "/") continue;
     stack.push(element);
-    if (stack.length > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
   }
   const open = stack[stack.length - 1];
   if (open) throw new Malformed(`tag <${open.tag}> n\xE3o foi fechada`);
@@ -649,12 +656,15 @@ function validateTree(value) {
 }
 
 // src/canvas/snapshot.ts
+var TITLE_STRIP = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
 function buildSnapshot(title, html, now) {
-  const cleanTitle = typeof title === "string" ? title.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, LIMITS.titleChars) : "";
+  const cleanTitle = typeof title === "string" ? title.replace(TITLE_STRIP, " ").trim().slice(0, LIMITS.titleChars) : "";
   const parsed = parseCanvasHtml(html);
   if (!parsed.ok) return { ok: false, message: parsed.message };
   if (parsed.tree.length === 0) return { ok: false, message: "o canvas est\xE1 vazio" };
-  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree: parsed.tree, blocked: parsed.blocked } };
+  const tree = validateTree(parsed.tree);
+  if (!tree) return { ok: false, message: "o canvas excede os limites de estrutura" };
+  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: parsed.blocked } };
 }
 
 // service/store.ts
@@ -703,8 +713,13 @@ function createStore(dataDir) {
     await mkdir2(dir, { recursive: true });
     const target = fileOf(record.sessionId);
     const tmp = `${target}.${randomUUID2()}.tmp`;
-    await writeFile(tmp, JSON.stringify(record), "utf8");
-    await rename2(tmp, target);
+    try {
+      await writeFile(tmp, JSON.stringify(record), "utf8");
+      await rename2(tmp, target);
+    } catch (error) {
+      await rm2(tmp, { force: true });
+      throw error;
+    }
   };
   const outdated = (sessionId, options) => options?.expectedGeneration !== void 0 && options.expectedGeneration !== generation(sessionId);
   return {
@@ -769,7 +784,11 @@ function authorized(header) {
 }
 function send(response, status, payload) {
   const body = JSON.stringify(payload);
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body) });
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    ...status === 413 ? { connection: "close" } : {}
+  });
   response.end(body);
 }
 var BodyTooLarge = class extends Error {
@@ -778,10 +797,13 @@ function readBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let rejected = false;
     request.on("data", (chunk) => {
+      if (rejected) return;
       size += chunk.length;
       if (size > BODY_MAX_BYTES) {
-        request.destroy();
+        rejected = true;
+        chunks.length = 0;
         reject(new BodyTooLarge());
         return;
       }

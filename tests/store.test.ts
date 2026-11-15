@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -110,6 +110,30 @@ describe("store", () => {
     const tooDeep = await store.publish("ses_b", "t", nest(33), 1);
     assert.equal(tooDeep?.canvas, null);
     assert.ok(tooDeep?.error);
+  });
+
+  it("folha void no nível 33 é recusada na publicação e o canvas vigente permanece (nunca some)", async () => {
+    const store = createStore(dir);
+    await store.publish("ses_a", "bom", "<p>bom</p>", 1);
+    const deep = "<div>".repeat(32) + "<br>" + "</div>".repeat(32);
+    const record = await store.publish("ses_a", "fundo", deep, 2);
+    assert.equal(record?.canvas?.title, "bom");
+    assert.ok(record?.error);
+    assert.equal((await store.read("ses_a"))?.canvas?.title, "bom");
+  });
+
+  it("título sem controles bidirecionais", async () => {
+    const record = await createStore(dir).publish("ses_a", "ab\u202ecd", "<p>x</p>", 1);
+    assert.equal(record?.canvas?.title, "ab cd");
+  });
+
+  it("falha de gravação não deixa .tmp órfão", async () => {
+    const store = createStore(dir);
+    await store.publish("ses_a", "A", "<p>a</p>", 1);
+    await rm(path.join(dir, "canvases", "ses_a.json"));
+    await mkdir(path.join(dir, "canvases", "ses_a.json"));
+    await assert.rejects(store.publish("ses_a", "B", "<p>b</p>", 2));
+    assert.deepEqual((await readdir(path.join(dir, "canvases"))).filter((name) => name.endsWith(".tmp")), []);
   });
 
   it("exclusão concorrente descarta a publicação que começou antes dela (CA9)", async () => {

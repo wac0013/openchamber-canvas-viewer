@@ -218,12 +218,12 @@ function parseOrThrow(html, blocked) {
       block(`<${name}>`);
       continue;
     }
+    if (stack.length + 1 > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
     count();
     const element = { t: "el", tag: name, attrs: readAttributes(opening[2] ?? "", name), c: [] };
     children().push(element);
     if (VOID_TAGS.has(name) || opening[3] === "/") continue;
     stack.push(element);
-    if (stack.length > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
   }
   const open = stack[stack.length - 1];
   if (open) throw new Malformed(`tag <${open.tag}> n\xE3o foi fechada`);
@@ -240,14 +240,69 @@ function parseCanvasHtml(html) {
     return { ok: false, message: "falha ao ler o HTML" };
   }
 }
+function validateTree(value) {
+  let nodes = 0;
+  let items = 0;
+  const seen = /* @__PURE__ */ new Set();
+  const walk = (raw, depth) => {
+    if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
+    const node = raw;
+    if (node.t === "text") {
+      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
+    }
+    if (depth > LIMITS.depth) return null;
+    if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
+    if (typeof node.attrs !== "object" || node.attrs === null || !Array.isArray(node.c)) return null;
+    const attrs = {};
+    for (const [name, attr] of Object.entries(node.attrs)) {
+      if (typeof attr !== "string") return null;
+      if (name === "class") {
+        const tokens = attr.split(/\s+/).filter(Boolean);
+        if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
+        attrs.class = tokens.join(" ");
+      } else if (name === "title") {
+        if (attr.length > 200) return null;
+        attrs.title = attr;
+      } else if (name === "colspan" || name === "rowspan") {
+        if (!/^[1-9][0-9]?$/.test(attr)) return null;
+        attrs[name] = attr;
+      } else if (name === "data-canvas-item") {
+        if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
+        seen.add(attr);
+        attrs[name] = attr;
+      } else {
+        return null;
+      }
+    }
+    if (VOID_TAGS.has(node.tag) && node.c.length > 0) return null;
+    const c = [];
+    for (const child of node.c) {
+      const clean = walk(child, depth + 1);
+      if (!clean) return null;
+      c.push(clean);
+    }
+    return { t: "el", tag: node.tag, attrs, c };
+  };
+  if (!Array.isArray(value)) return null;
+  const tree = [];
+  for (const child of value) {
+    const clean = walk(child, 1);
+    if (!clean) return null;
+    tree.push(clean);
+  }
+  return tree;
+}
 
 // src/canvas/snapshot.ts
+var TITLE_STRIP = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
 function buildSnapshot(title, html, now) {
-  const cleanTitle = typeof title === "string" ? title.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, LIMITS.titleChars) : "";
+  const cleanTitle = typeof title === "string" ? title.replace(TITLE_STRIP, " ").trim().slice(0, LIMITS.titleChars) : "";
   const parsed = parseCanvasHtml(html);
   if (!parsed.ok) return { ok: false, message: parsed.message };
   if (parsed.tree.length === 0) return { ok: false, message: "o canvas est\xE1 vazio" };
-  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree: parsed.tree, blocked: parsed.blocked } };
+  const tree = validateTree(parsed.tree);
+  if (!tree) return { ok: false, message: "o canvas excede os limites de estrutura" };
+  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: parsed.blocked } };
 }
 
 // service/paths.ts

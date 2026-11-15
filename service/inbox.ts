@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { link, lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 import { INBOX_SCHEMA_VERSION, LIMITS, SESSION_ID_PATTERN } from "../src/shared/contract.ts";
@@ -21,6 +21,9 @@ const CLAIMED_NAME = /^([A-Za-z0-9_-]{1,128})\.json\.[0-9a-f-]{36}\.proc$/;
 const MAX_FILE_BYTES = LIMITS.htmlChars * 6 + 4096;
 /** Reivindicação abandonada (processo morreu no meio) é descartada depois deste tempo. */
 const STALE_CLAIM_MS = 60_000;
+/** Falhas de I/O seguidas de uma sessão antes de a publicação ser registrada como recusada. */
+const MAX_ATTEMPTS = 5;
+const attempts = new Map<string, number>();
 
 export type DrainOptions = {
   onError?: (sessionId: string, error: unknown) => void;
@@ -71,29 +74,37 @@ export async function drainInbox(inbox: string, store: Store, now: () => number,
         ? await store.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation })
         : await store.reject(sessionId, payload.message, now(), { expectedGeneration: generation });
       if (record) changed.push(sessionId);
-      await rm(claimed, { force: true });
+      attempts.delete(sessionId);
+      await rm(claimed, { force: true, recursive: true });
     } catch (error) {
       options.onError?.(sessionId, error);
-      await giveBack(claimed, file);
+      const tried = (attempts.get(sessionId) ?? 0) + 1;
+      if (tried >= MAX_ATTEMPTS) {
+        attempts.delete(sessionId);
+        await rm(claimed, { force: true, recursive: true });
+        await store.reject(sessionId, "não foi possível gravar a publicação (erro de disco)", now(), { expectedGeneration: generation }).catch(() => null);
+      } else {
+        attempts.set(sessionId, tried);
+        await giveBack(claimed, file);
+      }
     }
   }
   return changed;
 }
 
-/** Devolve a publicação à caixa para nova tentativa, a menos que o plugin já tenha depositado uma mais nova. */
+/**
+ * Devolve a publicação à caixa para nova tentativa. `link` falha se já existe um arquivo
+ * (o plugin depositou versão mais nova): nesse caso a mais nova vence e a devolvida é descartada.
+ */
 async function giveBack(claimed: string, file: string): Promise<void> {
-  try {
-    await lstat(file);
-    await rm(claimed, { force: true });
-  } catch {
-    await rename(claimed, file).catch(() => rm(claimed, { force: true }));
-  }
+  await link(claimed, file).catch(() => undefined);
+  await rm(claimed, { force: true, recursive: true });
 }
 
 async function dropStaleClaim(claimed: string, now: number): Promise<void> {
   try {
     const info = await lstat(claimed);
-    if (now - info.mtimeMs > STALE_CLAIM_MS) await rm(claimed, { force: true });
+    if (now - info.mtimeMs > STALE_CLAIM_MS) await rm(claimed, { force: true, recursive: true });
   } catch {
     return;
   }
