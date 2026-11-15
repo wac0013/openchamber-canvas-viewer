@@ -1,0 +1,49 @@
+{
+  "name": "openchamber-canvas-viewer",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Canvas por sessão no OpenChamber, atualizado em tempo real pelo agente",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wac0013/openchamber-canvas-viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wac0013/openchamber-canvas-viewer/issues"
+  },
+  "homepage": "https://github.com/wac0013/openchamber-canvas-viewer#readme",
+  "scripts": {
+    "build": "node build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"tests/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@openchamber/sdk": "^2.7.0",
+    "@types/node": "^24.19.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=2.6.1"
+    },
+    "contributes": {
+      "panel": {
+        "id": "canvas-viewer",
+        "name": "Canvas",
+        "icon": "panel/icon.svg",
+        "entry": "panel/index.html"
+      },
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host",
+        "keepRunning": true
+      },
+      "sessionEvents": {
+        "events": ["session-deleted"]
+      },
+      "opencodePlugin": "plugin"
+    }
+  }
+}
