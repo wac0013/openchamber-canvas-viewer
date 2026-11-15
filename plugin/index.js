@@ -16,6 +16,8 @@ var LIMITS = {
 };
 var SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 var BLOCKED_NOTES_MAX = 20;
+var UPDATE_REQUEST_MARKER = "[Painel Canvas \xB7 Atualizar]";
+var UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o canvas desta conversa: publique de novo com canvas_publish, refletindo o estado atual do trabalho e mantendo os mesmos ids de elemento. N\xE3o repita a visualiza\xE7\xE3o no chat; responda s\xF3 com um resumo curto do que mudou.`;
 
 // src/canvas/sanitize.ts
 var ALLOWED_TAGS = /* @__PURE__ */ new Set([

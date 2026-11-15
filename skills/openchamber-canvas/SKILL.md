@@ -23,6 +23,19 @@ Se a ferramenta `canvas_publish` não existir nesta sessão, avise que a extens�
 4. Leia o retorno da ferramenta: ele diz se publicou e o que foi removido por segurança. Se disser "NÃO publicado", corrija o HTML e publique de novo; o canvas anterior continua na tela.
 5. **Guarde o último HTML que você publicou** no seu contexto: é a base da próxima atualização. Se você perdeu o HTML (contexto resumido), peça ao usuário para usar **+ Contexto** no cabeçalho do painel: o chip traz só o **texto** do canvas (sem HTML nem classes, cortado em 16 000 caracteres), com cada elemento marcado como `[#id]`. Dá para reconstruir o canvas a partir dele, mas de forma aproximada: refaça a estrutura e **reutilize os mesmos ids**.
 
+## Pedido do usuário pelo botão Atualizar
+
+O ideal é você atualizar o canvas **sozinho**, conforme avança. Quando isso não acontece, o usuário clica em **Atualizar** no painel e chega uma mensagem do usuário que começa com o marcador abaixo:
+
+```
+[Painel Canvas · Atualizar] Atualize agora o canvas desta conversa: …
+```
+
+- É um **pedido formal do usuário**: publique de novo agora com `canvas_publish`, refletindo o estado **atual** do trabalho, **mesmo que ache que nada mudou** (a hora do painel também se atualiza). Mantenha os mesmos ids de elemento.
+- Responda no chat só com um resumo curto do que mudou; não repita a visualização.
+- A mensagem é fixa e não traz conteúdo do canvas. Se você perdeu o HTML anterior, reconstrua a estrutura a partir do trabalho atual e reutilize os ids que lembrar.
+- Se o botão foi preciso, algo falhou na atualização automática: da próxima vez, atualize o canvas assim que concluir uma etapa, sem esperar o pedido.
+
 ## Não repita a visualização no chat
 
 O canvas é a visualização. No chat responda só com um **resumo curto** (uma ou duas frases: o que está no painel e o que mudou). Não cole a tabela, a lista de etapas nem o HTML no chat.

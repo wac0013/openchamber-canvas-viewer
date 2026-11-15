@@ -15,6 +15,7 @@ import { SERVICE_VERSION, SESSION_ID_PATTERN, type CanvasResponse } from "../src
 import { discardPending, drainInbox } from "./inbox.ts";
 import { inboxDir } from "./paths.ts";
 import { createStore } from "./store.ts";
+import { createUpdateRequester } from "./update-request.ts";
 
 const PORT = Number(process.env.OPENCHAMBER_SERVICE_PORT || 0);
 const TOKEN = process.env.OPENCHAMBER_SERVICE_TOKEN || "";
@@ -30,6 +31,12 @@ if (!PORT || !TOKEN || !DATA_DIR) {
 const store = createStore(DATA_DIR);
 const inbox = inboxDir();
 const host = createServiceHost({ env: process.env });
+const updateRequester = createUpdateRequester({
+  status: (sessionId) => host.sessions.status(sessionId),
+  send: (sessionId, prompt) => host.sessions.send(sessionId, prompt),
+});
+
+const UPDATE_STATUS: Record<string, number> = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502 };
 
 function authorized(header: string | undefined): boolean {
   const expected = Buffer.from(`Bearer ${TOKEN}`);
@@ -104,6 +111,18 @@ async function route(request: http.IncomingMessage, response: http.ServerRespons
     await drain();
     const record = await store.read(sessionId);
     send(response, 200, { ok: true, version: SERVICE_VERSION, canvas: record?.canvas ?? null, error: record?.error ?? null } satisfies CanvasResponse);
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/update-request") {
+    let sessionId = "";
+    try {
+      const body = JSON.parse(await readBody(request)) as { sessionId?: unknown };
+      sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+    } catch (error) {
+      if (error instanceof BodyTooLarge) throw error;
+    }
+    const outcome = await updateRequester.request(sessionId);
+    send(response, outcome.ok ? 200 : (UPDATE_STATUS[outcome.code] ?? 502), outcome);
     return;
   }
   if (request.method === "POST" && url.pathname === "/session-events") {
