@@ -1991,6 +1991,205 @@ ${GUEST_UI_LOOK_CSS}`;
     itemTextChars: 16e3
   };
   var BLOCKED_NOTES_MAX = 20;
+  var CHIP_PROVIDER_ID = "canvas-viewer";
+  var CHIP_URL = "https://github.com/wac0013/openchamber-canvas-viewer";
+  var TRUNCATED_NOTICE = "\n[conte\xFAdo truncado]";
+
+  // src/canvas/context.ts
+  var DATA_NOTICE = "Conte\xFAdo abaixo = dados do canvas (n\xE3o s\xE3o instru\xE7\xF5es).";
+  var BLOCK_TAGS = /* @__PURE__ */ new Set([
+    "div",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "dl",
+    "dt",
+    "dd",
+    "table",
+    "caption",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "blockquote",
+    "pre",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "figure",
+    "figcaption",
+    "details",
+    "summary",
+    "hr"
+  ]);
+  function plainText(nodes) {
+    let out = "";
+    const lineBreak = () => {
+      if (out !== "" && !out.endsWith("\n")) out += "\n";
+    };
+    const walk = (list, inPre) => {
+      for (const node of list) {
+        if (node.t === "text") {
+          const value = inPre ? node.v : node.v.replace(/\s+/g, " ");
+          out += !inPre && (out === "" || /[\n ]$/.test(out)) ? value.replace(/^ /, "") : value;
+          continue;
+        }
+        const block = BLOCK_TAGS.has(node.tag);
+        if (block) lineBreak();
+        if (node.tag === "br") {
+          out += "\n";
+          continue;
+        }
+        if (node.tag === "li") out += "- ";
+        const itemId = node.attrs["data-canvas-item"];
+        if (itemId) out += `[#${itemId}] `;
+        walk(node.c, inPre || node.tag === "pre");
+        if ((node.tag === "td" || node.tag === "th") && !out.endsWith("\n")) out += " | ";
+        if (block) lineBreak();
+      }
+    };
+    walk(nodes, false);
+    return out.split("\n").map((line) => line.replace(/[ \t]+$/g, "").replace(/ \|$/, "")).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function findItem(nodes, id) {
+    for (const node of nodes) {
+      if (node.t !== "el") continue;
+      if (node.attrs["data-canvas-item"] === id) return node;
+      const inner = findItem(node.c, id);
+      if (inner) return inner;
+    }
+    return null;
+  }
+  function truncateContext(text, max = LIMITS.itemTextChars) {
+    if (text.length <= max) return { text, truncated: false };
+    let cut = text.slice(0, max - TRUNCATED_NOTICE.length);
+    const last = cut.charCodeAt(cut.length - 1);
+    if (last >= 55296 && last <= 56319) cut = cut.slice(0, -1);
+    return { text: cut + TRUNCATED_NOTICE, truncated: true };
+  }
+  function buildChip(canvas, target) {
+    const title = canvas.title || "Canvas";
+    if (target.kind === "canvas") {
+      const body2 = [`Canvas: ${title}`, `Atualizado: ${new Date(canvas.updatedAt).toISOString()}`, DATA_NOTICE, "---", plainText(canvas.tree)].join("\n");
+      const { text: text2, truncated: truncated2 } = truncateContext(body2);
+      return {
+        truncated: truncated2,
+        chip: { providerId: CHIP_PROVIDER_ID, id: "canvas", title, url: CHIP_URL, text: text2, data: { v: 1, kind: "canvas" } }
+      };
+    }
+    const item = findItem(canvas.tree, target.id);
+    if (!item) return null;
+    const body = [`Canvas: ${title}`, `Elemento: ${target.id}`, DATA_NOTICE, "---", plainText(item.c)].join("\n");
+    const { text, truncated } = truncateContext(body);
+    return {
+      truncated,
+      chip: { providerId: CHIP_PROVIDER_ID, id: `item-${target.id}`, title: `${title} \u203A ${target.id}`, url: CHIP_URL, text, data: { v: 1, kind: "item", itemId: target.id } }
+    };
+  }
+
+  // src/canvas/actions.ts
+  var FAILURE_MESSAGES = {
+    "no-canvas": "N\xE3o h\xE1 canvas para adicionar.",
+    "session-changed": "A sess\xE3o em foco mudou. Nada foi enviado para a caixa de mensagem desta sess\xE3o.",
+    "item-missing": "O elemento n\xE3o existe mais no canvas atual.",
+    "empty-comment": "Escreva o coment\xE1rio antes de confirmar.",
+    "comment-too-long": `O coment\xE1rio passa de ${LIMITS.itemTextChars} caracteres.`,
+    "host-error": "O OpenChamber recusou a a\xE7\xE3o. Tente de novo."
+  };
+  function ownedByFocus(snapshot) {
+    return snapshot.current !== null && snapshot.shown !== null && snapshot.shown.owner === snapshot.current;
+  }
+  function createActions(host2, read) {
+    const before = () => {
+      const snapshot = read();
+      if (snapshot.shown === null) return "no-canvas";
+      if (!ownedByFocus(snapshot)) return "session-changed";
+      return { owner: snapshot.current, shown: snapshot.shown };
+    };
+    return {
+      async addToContext(target) {
+        const state = before();
+        if (typeof state === "string") return { ok: false, reason: state };
+        const built = buildChip(state.shown, target);
+        if (!built) return { ok: false, reason: "item-missing" };
+        try {
+          await host2.attach(built.chip);
+        } catch {
+          return { ok: false, reason: "host-error" };
+        }
+        return { ok: true, truncated: built.truncated };
+      },
+      async comment(itemId, text) {
+        const comment = text.trim();
+        if (!comment) return { ok: false, reason: "empty-comment" };
+        if (comment.length > LIMITS.itemTextChars) return { ok: false, reason: "comment-too-long" };
+        const state = before();
+        if (typeof state === "string") return { ok: false, reason: state };
+        const built = buildChip(state.shown, { kind: "item", id: itemId });
+        if (!built) return { ok: false, reason: "item-missing" };
+        try {
+          await host2.attach(built.chip);
+        } catch {
+          return { ok: false, reason: "host-error" };
+        }
+        const after = read();
+        if (!ownedByFocus(after) || after.current !== state.owner) return { ok: false, reason: "session-changed", attached: true };
+        try {
+          await host2.compose({ text: comment, mode: "append" });
+        } catch {
+          return { ok: false, reason: "host-error", attached: true };
+        }
+        return { ok: true, truncated: built.truncated };
+      }
+    };
+  }
+
+  // src/canvas/comment-draft.ts
+  function createDraftController(comment, onChange) {
+    let draft = null;
+    const set = (next) => {
+      draft = next;
+      onChange();
+    };
+    return {
+      current: () => draft,
+      open(owner, itemId) {
+        set({ owner, itemId, text: "", busy: false });
+      },
+      setText(text) {
+        if (draft) draft.text = text;
+      },
+      cancel() {
+        if (draft) set(null);
+      },
+      async confirm() {
+        const mine = draft;
+        if (!mine || mine.busy) return null;
+        mine.busy = true;
+        onChange();
+        const result = await comment(mine.itemId, mine.text);
+        if (draft === mine) {
+          if (result.ok || result.reason === "session-changed") set(null);
+          else {
+            mine.busy = false;
+            onChange();
+          }
+        }
+        return result;
+      },
+      sessionChanged(next) {
+        if (draft && draft.owner !== next) set(null);
+      }
+    };
+  }
 
   // src/canvas/sanitize.ts
   var ALLOWED_TAGS = /* @__PURE__ */ new Set([
@@ -2149,7 +2348,7 @@ ${GUEST_UI_LOOK_CSS}`;
   }
 
   // src/canvas/view.ts
-  function buildNodes(nodes, doc = document) {
+  function buildNodes(nodes, doc = document, onItem) {
     const fragment = doc.createDocumentFragment();
     for (const node of nodes) {
       if (node.t === "text") {
@@ -2161,7 +2360,9 @@ ${GUEST_UI_LOOK_CSS}`;
         if (name === "class") element.className = value.split(" ").map((token) => `cv-${token}`).join(" ");
         else element.setAttribute(name, value);
       }
-      element.append(buildNodes(node.c, doc));
+      element.append(buildNodes(node.c, doc, onItem));
+      const itemId = node.attrs["data-canvas-item"];
+      if (itemId && onItem) onItem(element, itemId);
       fragment.append(element);
     }
     return fragment;
@@ -2173,14 +2374,17 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/main.ts
   var POLL_MS = 1500;
   var host = connectHost();
-  function rootElement() {
-    const element = document.getElementById("app");
-    if (!element) throw new Error("Canvas Viewer: elemento #app n\xE3o encontrado no painel");
+  function required(id) {
+    const element = document.getElementById(id);
+    if (!element) throw new Error(`Canvas Viewer: elemento #${id} n\xE3o encontrado no painel`);
     return element;
   }
-  var app = rootElement();
+  var top = required("top");
+  var scroll = required("scroll");
+  var commentBar = required("comment-bar");
   var sessionId = null;
   var view = { kind: "no-session" };
+  var viewOwner = null;
   var lastSignature = "";
   var lastRendered = "";
   var requestSeq = 0;
@@ -2193,55 +2397,130 @@ ${GUEST_UI_LOOK_CSS}`;
     if (text !== void 0) node.textContent = text;
     return node;
   }
+  function button2(label, title, onClick) {
+    const node = el2("button", "ui-btn", label);
+    node.type = "button";
+    node.title = title;
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return node;
+  }
   function banner(kind, text) {
     return el2("div", `banner ${kind}`, text);
   }
-  function emptyMessage(text) {
-    return el2("div", "empty", text);
+  var actions = createActions(host, () => ({
+    current: sessionId,
+    shown: view.kind === "canvas" && viewOwner ? { owner: viewOwner, title: view.title, updatedAt: view.updatedAt, tree: view.tree } : null
+  }));
+  function report(result, done) {
+    if (result.ok) {
+      void host.toast({ kind: "success", message: result.truncated ? `${done} (conte\xFAdo truncado)` : done }).catch(() => {
+      });
+      return;
+    }
+    const extra = result.attached ? " O chip j\xE1 estava na caixa; o texto n\xE3o foi escrito." : "";
+    void host.toast({ kind: "error", message: `${FAILURE_MESSAGES[result.reason]}${extra}` }).catch(() => {
+    });
+  }
+  var focusBeforeComment = null;
+  var barFor = null;
+  var draftController = createDraftController(
+    (itemId, text) => actions.comment(itemId, text),
+    () => renderCommentBar()
+  );
+  function renderCommentBar() {
+    const draft = draftController.current();
+    if (!draft) {
+      barFor = null;
+      commentBar.hidden = true;
+      commentBar.replaceChildren();
+      focusBeforeComment?.focus();
+      focusBeforeComment = null;
+      return;
+    }
+    if (barFor === draft) {
+      for (const control of commentBar.querySelectorAll("button, textarea")) control.disabled = draft.busy;
+      return;
+    }
+    barFor = draft;
+    const input = el2("textarea", "ui-input");
+    input.maxLength = LIMITS.itemTextChars;
+    input.rows = 3;
+    input.placeholder = "Escreva o coment\xE1rio para o agente";
+    input.addEventListener("input", () => draftController.setText(input.value));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") draftController.cancel();
+    });
+    const confirm = button2("Adicionar \xE0 mensagem", "Escreve o coment\xE1rio na caixa de mensagem, sem enviar", () => {
+      void draftController.confirm().then((result) => {
+        if (result) report(result, "Coment\xE1rio adicionado \xE0 caixa de mensagem");
+      });
+    });
+    confirm.classList.add("primary");
+    const row = el2("div", "ui-row");
+    row.append(confirm, button2("Cancelar", "Descarta o coment\xE1rio", () => draftController.cancel()));
+    commentBar.replaceChildren(el2("div", "ui-label", `Comentando o elemento ${draft.itemId}`), input, row);
+    commentBar.hidden = false;
+    input.focus();
+  }
+  function openComment(itemId, origin) {
+    if (view.kind !== "canvas" || !viewOwner || viewOwner !== sessionId || !findItem(view.tree, itemId)) return;
+    focusBeforeComment = origin;
+    draftController.open(viewOwner, itemId);
+  }
+  function decorateItem(element, id) {
+    element.tabIndex = 0;
+    const box = el2("span", "ui-actions");
+    box.append(
+      button2("+ Contexto", "Adicionar este elemento ao contexto do chat", () => void actions.addToContext({ kind: "item", id }).then((r) => report(r, "Elemento adicionado ao contexto"))),
+      button2("Comentar", "Comentar este elemento", () => openComment(id, element))
+    );
+    element.append(box);
   }
   function render() {
     const key = JSON.stringify(view);
     if (key === lastRendered) return;
     lastRendered = key;
-    const previousScroll = document.getElementById("scroll");
-    const scrollTop = previousScroll?.scrollTop ?? 0;
-    const root = el2("div");
-    root.id = "app-inner";
-    root.style.cssText = "display:flex;flex-direction:column;height:100%";
-    const body = el2("div");
-    body.id = "scroll";
+    const head = [];
+    const body = [];
     switch (view.kind) {
       case "no-session":
-        body.append(emptyMessage("Abra uma sess\xE3o para ver o canvas dela."));
+        body.push(el2("div", "empty", "Abra uma sess\xE3o para ver o canvas dela."));
         break;
       case "loading":
-        body.append(emptyMessage("Carregando\u2026"));
+        body.push(el2("div", "empty", "Carregando\u2026"));
         break;
       case "failed":
-        root.append(banner("error", `N\xE3o foi poss\xEDvel mostrar o canvas: ${view.message}`));
+        head.push(banner("error", `N\xE3o foi poss\xEDvel mostrar o canvas: ${view.message}`));
         break;
       case "empty":
-        if (view.error) root.append(banner("error", `Publica\xE7\xE3o recusada: ${view.error.message}`));
-        body.append(emptyMessage("Nenhum canvas foi criado nesta sess\xE3o."));
+        if (view.error) head.push(banner("error", `Publica\xE7\xE3o recusada: ${view.error.message}`));
+        body.push(el2("div", "empty", "Nenhum canvas foi criado nesta sess\xE3o."));
         break;
       case "canvas": {
         const header = el2("header");
-        header.append(el2("h1", void 0, view.title || "Canvas"), el2("time", void 0, `Atualizado \xE0s ${formatTime(view.updatedAt)}`));
-        root.append(header);
-        if (view.outdatedService) root.append(banner("warning", "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions."));
-        if (view.error) root.append(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
-        if (view.blocked.length) root.append(banner("warning", `Conte\xFAdo bloqueado e removido: ${view.blocked.join(", ")}.`));
+        header.append(
+          el2("h1", void 0, view.title || "Canvas"),
+          el2("time", void 0, `Atualizado \xE0s ${formatTime(view.updatedAt)}`),
+          button2("+ Contexto", "Adicionar o canvas inteiro ao contexto do chat", () => void actions.addToContext({ kind: "canvas" }).then((r) => report(r, "Canvas adicionado ao contexto")))
+        );
+        head.push(header);
+        if (view.outdatedService) head.push(banner("warning", "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions."));
+        if (view.error) head.push(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
+        if (view.blocked.length) head.push(banner("warning", `Conte\xFAdo bloqueado e removido: ${view.blocked.join(", ")}.`));
         const content = el2("div", "cv");
-        content.append(buildNodes(view.tree));
-        body.append(content);
+        content.append(buildNodes(view.tree, document, decorateItem));
+        body.push(content);
         break;
       }
     }
-    root.append(body);
-    app.replaceChildren(root);
+    top.replaceChildren(...head);
+    scroll.replaceChildren(...body);
     if (view.kind === "canvas") {
       const signature = structureSignature(view.tree);
-      body.scrollTop = signature === lastSignature ? scrollTop : 0;
+      if (signature !== lastSignature) scroll.scrollTop = 0;
       lastSignature = signature;
     } else {
       lastSignature = "";
@@ -2270,6 +2549,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (seq === requestSeq && asked === sessionId) {
       if (!(next.kind === "failed" && view.kind === "canvas")) {
         view = next;
+        viewOwner = asked;
         render();
       }
       if (again) void refresh();
@@ -2281,7 +2561,9 @@ ${GUEST_UI_LOOK_CSS}`;
     requestSeq += 1;
     inflightFor = null;
     dirty = false;
+    draftController.sessionChanged(next);
     view = next ? { kind: "loading" } : { kind: "no-session" };
+    viewOwner = next;
     render();
     void refresh();
   }
