@@ -3,6 +3,7 @@
 
 import type { CanvasNode } from "../shared/contract.ts";
 
+/** Classes do agente ganham o prefixo `cv-`: não colidem com a interface do painel. */
 export function buildNodes(nodes: readonly CanvasNode[], doc: Document = document): DocumentFragment {
   const fragment = doc.createDocumentFragment();
   for (const node of nodes) {
@@ -12,7 +13,6 @@ export function buildNodes(nodes: readonly CanvasNode[], doc: Document = documen
     }
     const element = doc.createElement(node.tag);
     for (const [name, value] of Object.entries(node.attrs)) {
-      // Classes do agente ganham prefixo: não colidem com a interface do painel.
       if (name === "class") element.className = value.split(" ").map((token) => `cv-${token}`).join(" ");
       else element.setAttribute(name, value);
     }

@@ -1,4 +1,5 @@
 // plugin/index.ts
+import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 
 // src/shared/contract.ts
@@ -86,6 +87,8 @@ var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
 var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\xA0" };
 var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
+var BIDI_CHARS_ALL = /[\u202a-\u202e\u2066-\u2069]/g;
 var Malformed = class extends Error {
 };
 function decodeEntities(raw) {
@@ -95,7 +98,7 @@ function decodeEntities(raw) {
       const ok = Number.isInteger(code) && (code === 9 || code === 10 || code === 13 || code >= 32 && code <= 1114111 && code !== 127 && !(code >= 55296 && code <= 57343));
       return ok ? String.fromCodePoint(code) : "\uFFFD";
     }
-    return NAMED_ENTITIES[body] ?? whole;
+    return Object.hasOwn(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body] : whole;
   });
 }
 function position(html, index) {
@@ -121,8 +124,12 @@ function parseOrThrow(html, blocked) {
   };
   const pushText = (raw) => {
     if (!raw) return;
-    const value = decodeEntities(raw);
+    let value = decodeEntities(raw);
     if (CONTROL_CHARS.test(value)) throw new Malformed("caractere de controle no texto");
+    if (BIDI_CHARS.test(value)) {
+      block("controle bidirecional");
+      value = value.replace(BIDI_CHARS_ALL, "");
+    }
     count();
     children().push({ t: "text", v: value });
   };
@@ -135,10 +142,9 @@ function parseOrThrow(html, blocked) {
       switch (name) {
         case "class": {
           const tokens = value.split(/\s+/).filter(Boolean);
-          if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) {
-            throw new Malformed(`classe inv\xE1lida em <${tag}> (use at\xE9 8 nomes [a-z][a-z0-9-])`);
-          }
-          attrs.class = tokens.join(" ");
+          const valid = tokens.filter((token) => CLASS_TOKEN.test(token)).slice(0, 8);
+          if (valid.length !== tokens.length) block("classe inv\xE1lida (use [a-z][a-z0-9-], at\xE9 8)");
+          if (valid.length) attrs.class = valid.join(" ");
           break;
         }
         case "title":
@@ -272,7 +278,6 @@ var index_default = {
       tools.add({
         name: "canvas_publish",
         description: DESCRIPTION,
-        // Oferecida direto ao modelo, fora do catálogo do Code Mode.
         options: { codemode: false },
         input: {
           type: "object",
@@ -293,7 +298,7 @@ var index_default = {
           const payload = { v: INBOX_SCHEMA_VERSION, sessionId: context.sessionID, title: built.snapshot.title, html: String(html) };
           const target = inboxFile(context.sessionID);
           await mkdir(inboxDir(), { recursive: true });
-          const tmp = `${target}.tmp`;
+          const tmp = `${target}.${randomUUID()}.tmp`;
           await writeFile(tmp, JSON.stringify(payload), "utf8");
           await rename(tmp, target);
           const blocked = built.snapshot.blocked.length ? ` Removido por seguran\xE7a: ${built.snapshot.blocked.join(", ")}.` : "";

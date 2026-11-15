@@ -18,6 +18,7 @@ describe("store", () => {
   it("publica e lê o canvas da sessão", async () => {
     const store = createStore(dir);
     const record = await store.publish("ses_a", "Título", "<p>oi</p>", 1000);
+    assert.ok(record);
     assert.equal(record.canvas?.title, "Título");
     assert.equal(record.canvas?.updatedAt, 1000);
     assert.equal(record.error, null);
@@ -53,6 +54,7 @@ describe("store", () => {
     const store = createStore(dir);
     await store.publish("ses_a", "bom", "<p>bom</p>", 1);
     const record = await store.publish("ses_a", "ruim", "<div><p>quebrado</div>", 2);
+    assert.ok(record);
     assert.equal(record.canvas?.title, "bom");
     assert.equal(record.canvas?.updatedAt, 1);
     assert.equal(record.error?.at, 2);
@@ -64,23 +66,27 @@ describe("store", () => {
     const store = createStore(dir);
     await store.publish("ses_a", "x", "<p>", 1);
     const record = await store.publish("ses_a", "ok", "<p>ok</p>", 2);
+    assert.ok(record);
     assert.equal(record.error, null);
   });
 
   it("primeira publicação inválida deixa canvas null com erro", async () => {
     const record = await createStore(dir).publish("ses_a", "x", "<p>", 1);
+    assert.ok(record);
     assert.equal(record.canvas, null);
     assert.ok(record.error);
   });
 
   it("publicação só com conteúdo bloqueado vazio é recusada", async () => {
     const record = await createStore(dir).publish("ses_a", "x", "<script>1</script>", 1);
+    assert.ok(record);
     assert.equal(record.canvas, null);
     assert.ok(record.error);
   });
 
   it("guarda o que foi bloqueado para o painel avisar (CA8)", async () => {
     const record = await createStore(dir).publish("ses_a", "x", "<p>ok</p><script>1</script>", 1);
+    assert.ok(record);
     assert.deepEqual(record.canvas?.blocked, ["<script>"]);
   });
 
@@ -93,6 +99,33 @@ describe("store", () => {
     assert.equal((await store.read("ses_b"))?.canvas?.title, "B");
     assert.deepEqual(await readdir(path.join(dir, "canvases")), ["ses_b.json"]);
     await store.remove("ses_a"); // idempotente
+  });
+
+  it("canvas no limite de profundidade (32) volta do disco; 33 é recusado na publicação", async () => {
+    const store = createStore(dir);
+    const nest = (depth: number) => "<div>".repeat(depth) + "texto" + "</div>".repeat(depth);
+    const fine = await store.publish("ses_a", "t", nest(32), 1);
+    assert.ok(fine?.canvas);
+    assert.ok((await store.read("ses_a"))?.canvas, "o que foi publicado precisa ser lido de volta");
+    const tooDeep = await store.publish("ses_b", "t", nest(33), 1);
+    assert.equal(tooDeep?.canvas, null);
+    assert.ok(tooDeep?.error);
+  });
+
+  it("exclusão concorrente descarta a publicação que começou antes dela (CA9)", async () => {
+    const store = createStore(dir);
+    const generation = store.generation("ses_a");
+    await store.remove("ses_a");
+    assert.equal(await store.publish("ses_a", "t", "<p>x</p>", 1, { expectedGeneration: generation }), null);
+    assert.equal(await store.reject("ses_a", "x", 1, { expectedGeneration: generation }), null);
+    assert.equal(await store.read("ses_a"), null);
+  });
+
+  it("operações simultâneas da mesma sessão são serializadas (último publicado vence, sem arquivo quebrado)", async () => {
+    const store = createStore(dir);
+    await Promise.all(Array.from({ length: 20 }, (_, i) => store.publish("ses_a", `v${i}`, `<p>${i}</p>`, i)));
+    assert.equal((await store.read("ses_a"))?.canvas?.title, "v19");
+    assert.deepEqual(await readdir(path.join(dir, "canvases")), ["ses_a.json"]);
   });
 
   it("recusa ids de sessão que não sejam nome de arquivo seguro", async () => {

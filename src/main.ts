@@ -23,6 +23,7 @@ let view: PanelView = { kind: "no-session" };
 let lastSignature = "";
 let lastRendered = "";
 let requestSeq = 0;
+let inflightFor: string | null = null;
 let polling: ReturnType<typeof setInterval> | undefined;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -40,8 +41,8 @@ function emptyMessage(text: string): HTMLElement {
   return el("div", "empty", text);
 }
 
+/** Só redesenha quando o que está na tela mudou (preserva seleção e rolagem). */
 function render(): void {
-  // Chave do que está na tela: sem mudança, não redesenha (preserva seleção e scroll).
   const key = JSON.stringify(view);
   if (key === lastRendered) return;
   lastRendered = key;
@@ -86,7 +87,6 @@ function render(): void {
   app.replaceChildren(root);
 
   if (view.kind === "canvas") {
-    // CA3: mesma estrutura → mantém a posição de rolagem; estrutura nova → volta ao topo.
     const signature = structureSignature(view.tree);
     body.scrollTop = signature === lastSignature ? scrollTop : 0;
     lastSignature = signature;
@@ -95,19 +95,28 @@ function render(): void {
   }
 }
 
+/**
+ * Lê o canvas da sessão em foco. Uma leitura por vez por sessão; resposta atrasada de outra
+ * sessão ou de uma chamada antiga nunca sobrescreve a atual. Falha passageira com um canvas
+ * na tela mantém o canvas (e a rolagem) em vez de trocá-lo por um erro.
+ */
 async function refresh(): Promise<void> {
-  if (!sessionId) return;
+  if (!sessionId || inflightFor === sessionId) return;
   const asked = sessionId;
   const seq = ++requestSeq;
+  inflightFor = asked;
+  let next: PanelView;
   try {
     const result = await host.serviceRequest({ method: "GET", path: "/canvas", query: { sessionId: asked } });
-    // Resposta atrasada de outra sessão ou de uma chamada antiga nunca sobrescreve a atual.
-    if (seq !== requestSeq || asked !== sessionId) return;
-    view = result.status === 200 ? viewFromResponse(parseCanvasResponse(result.body)) : { kind: "failed", message: `serviço respondeu ${result.status}` };
+    next = result.status === 200 ? viewFromResponse(parseCanvasResponse(result.body)) : { kind: "failed", message: `serviço respondeu ${result.status}` };
   } catch {
-    if (seq !== requestSeq || asked !== sessionId) return;
-    view = { kind: "failed", message: "serviço indisponível" };
+    next = { kind: "failed", message: "serviço indisponível" };
+  } finally {
+    if (inflightFor === asked) inflightFor = null;
   }
+  if (seq !== requestSeq || asked !== sessionId) return;
+  if (next.kind === "failed" && view.kind === "canvas") return;
+  view = next;
   render();
 }
 
@@ -115,6 +124,7 @@ function setSession(next: string | null): void {
   if (next === sessionId) return;
   sessionId = next;
   requestSeq += 1;
+  inflightFor = null;
   view = next ? { kind: "loading" } : { kind: "no-session" };
   render();
   void refresh();
@@ -130,7 +140,6 @@ host.onServiceEvent((event) => {
   if (event.topic === "canvas" && typeof data === "object" && data !== null && !Array.isArray(data) && data.sessionId === sessionId) void refresh();
 });
 
-// Rede de segurança (RN5): garante a atualização em até 2 s mesmo sem o evento do serviço.
 polling = setInterval(() => {
   if (!document.hidden) void refresh();
 }, POLL_MS);

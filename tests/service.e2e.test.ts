@@ -142,6 +142,23 @@ describe("serviço (ponta a ponta)", () => {
     assert.notEqual((await call("GET", "/canvas?sessionId=ses_c")).json.canvas, null);
   });
 
+  it("corpo grande demais responde 413 e o serviço continua de pé", async () => {
+    const big = "x".repeat(150_000);
+    const response = await fetch(`http://127.0.0.1:${port}/session-events`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}` }, body: big }).catch(() => null);
+    assert.ok(response === null || response.status === 413);
+    assert.equal((await call("GET", "/health")).status, 200);
+  });
+
+  it("alvo de requisição malformado com token válido não derruba o serviço", async () => {
+    const { request } = await import("node:http");
+    await new Promise<void>((resolve) => {
+      const req = request({ host: "127.0.0.1", port, method: "GET", path: "http://[::1", headers: { authorization: `Bearer ${TOKEN}` } }, (res) => { res.resume(); res.on("end", () => resolve()); });
+      req.on("error", () => resolve());
+      req.end();
+    });
+    assert.equal((await call("GET", "/health")).status, 200);
+  });
+
   it("não vaza conteúdo de canvas nos logs", () => {
     assert.equal(logs.includes("evil"), false);
   });

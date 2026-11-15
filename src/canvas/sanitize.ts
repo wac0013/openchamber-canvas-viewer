@@ -36,6 +36,9 @@ const CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
 const ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+/** Controles bidirecionais (U+202A–202E, U+2066–2069) permitem texto que parece outra coisa. */
+const BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
+const BIDI_CHARS_ALL = /[\u202a-\u202e\u2066-\u2069]/g;
 
 class Malformed extends Error {}
 
@@ -46,7 +49,7 @@ function decodeEntities(raw: string): string {
       const ok = Number.isInteger(code) && (code === 9 || code === 10 || code === 13 || (code >= 0x20 && code <= 0x10ffff && code !== 0x7f && !(code >= 0xd800 && code <= 0xdfff)));
       return ok ? String.fromCodePoint(code) : "\ufffd";
     }
-    return NAMED_ENTITIES[body] ?? whole;
+    return Object.hasOwn(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body]! : whole;
   });
 }
 
@@ -76,8 +79,12 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
   };
   const pushText = (raw: string): void => {
     if (!raw) return;
-    const value = decodeEntities(raw);
+    let value = decodeEntities(raw);
     if (CONTROL_CHARS.test(value)) throw new Malformed("caractere de controle no texto");
+    if (BIDI_CHARS.test(value)) {
+      block("controle bidirecional");
+      value = value.replace(BIDI_CHARS_ALL, "");
+    }
     count();
     children().push({ t: "text", v: value });
   };
@@ -91,10 +98,9 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
       switch (name) {
         case "class": {
           const tokens = value.split(/\s+/).filter(Boolean);
-          if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) {
-            throw new Malformed(`classe inválida em <${tag}> (use até 8 nomes [a-z][a-z0-9-])`);
-          }
-          attrs.class = tokens.join(" ");
+          const valid = tokens.filter((token) => CLASS_TOKEN.test(token)).slice(0, 8);
+          if (valid.length !== tokens.length) block("classe inválida (use [a-z][a-z0-9-], até 8)");
+          if (valid.length) attrs.class = valid.join(" ");
           break;
         }
         case "title":
@@ -146,7 +152,7 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
     if (closing) {
       const name = (closing[1] ?? "").toLowerCase();
       index += closing[0].length;
-      if (!ALLOWED_TAGS.has(name)) continue; // fechamento de tag removida/desembrulhada
+      if (!ALLOWED_TAGS.has(name)) continue;
       const top = stack.pop();
       if (!top || top.tag !== name) throw new Malformed(`fechamento </${name}> sem abertura correspondente (${position(html, index)})`);
       continue;
@@ -209,12 +215,14 @@ export function validateTree(value: unknown): CanvasNode[] | null {
   let items = 0;
   const seen = new Set<string>();
 
+  /** `depth` conta só elementos aninhados, igual ao parser: texto folha não é um nível. */
   const walk = (raw: unknown, depth: number): CanvasNode | null => {
-    if (depth > LIMITS.depth || ++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
+    if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
     const node = raw as Record<string, unknown>;
     if (node.t === "text") {
-      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
+      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
     }
+    if (depth > LIMITS.depth) return null;
     if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
     if (typeof node.attrs !== "object" || node.attrs === null || !Array.isArray(node.c)) return null;
     const attrs: Record<string, string> = {};

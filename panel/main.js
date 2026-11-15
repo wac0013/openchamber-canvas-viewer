@@ -1990,6 +1990,7 @@ ${GUEST_UI_LOOK_CSS}`;
     /** Texto máximo de um item marcável (limite do `host.attach`). */
     itemTextChars: 16e3
   };
+  var BLOCKED_NOTES_MAX = 20;
 
   // src/canvas/sanitize.ts
   var ALLOWED_TAGS = /* @__PURE__ */ new Set([
@@ -2045,16 +2046,18 @@ ${GUEST_UI_LOOK_CSS}`;
   var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
   var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
   var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+  var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
   function validateTree(value) {
     let nodes = 0;
     let items = 0;
     const seen = /* @__PURE__ */ new Set();
     const walk = (raw, depth) => {
-      if (depth > LIMITS.depth || ++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
+      if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
       const node = raw;
       if (node.t === "text") {
-        return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
+        return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
       }
+      if (depth > LIMITS.depth) return null;
       if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
       if (typeof node.attrs !== "object" || node.attrs === null || !Array.isArray(node.c)) return null;
       const attrs = {};
@@ -2114,16 +2117,17 @@ ${GUEST_UI_LOOK_CSS}`;
   function viewFromResponse(response) {
     if (!response) return { kind: "failed", message: "resposta do servi\xE7o inv\xE1lida" };
     if (!response.ok) return { kind: "failed", message: response.error };
-    if (!response.canvas) return { kind: "empty", error: response.error };
+    if (!response.canvas) return { kind: "empty", error: cleanError(response.error) };
     const tree = validateTree(response.canvas.tree);
-    if (!tree) return { kind: "failed", message: "o canvas guardado est\xE1 corrompido e foi ignorado" };
+    const updatedAt = response.canvas.updatedAt;
+    if (!tree || !isEpoch(updatedAt)) return { kind: "failed", message: "o canvas guardado est\xE1 corrompido e foi ignorado" };
     return {
       kind: "canvas",
-      title: typeof response.canvas.title === "string" ? response.canvas.title : "",
-      updatedAt: response.canvas.updatedAt,
+      title: typeof response.canvas.title === "string" ? response.canvas.title.slice(0, LIMITS.titleChars) : "",
+      updatedAt,
       tree,
-      blocked: Array.isArray(response.canvas.blocked) ? response.canvas.blocked.filter((note) => typeof note === "string") : [],
-      error: response.error,
+      blocked: Array.isArray(response.canvas.blocked) ? response.canvas.blocked.filter((note) => typeof note === "string").slice(0, BLOCKED_NOTES_MAX).map((note) => note.slice(0, 120)) : [],
+      error: cleanError(response.error),
       outdatedService: response.version !== SERVICE_VERSION
     };
   }
@@ -2134,6 +2138,14 @@ ${GUEST_UI_LOOK_CSS}`;
     } catch {
       return null;
     }
+  }
+  function isEpoch(value) {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 && value < 864e13;
+  }
+  function cleanError(value) {
+    if (typeof value !== "object" || value === null) return null;
+    const error = value;
+    return isEpoch(error.at) && typeof error.message === "string" ? { at: error.at, message: error.message.slice(0, 300) } : null;
   }
 
   // src/canvas/view.ts
@@ -2172,6 +2184,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var lastSignature = "";
   var lastRendered = "";
   var requestSeq = 0;
+  var inflightFor = null;
   var polling;
   function el2(tag, className, text) {
     const node = document.createElement(tag);
@@ -2234,23 +2247,29 @@ ${GUEST_UI_LOOK_CSS}`;
     }
   }
   async function refresh() {
-    if (!sessionId) return;
+    if (!sessionId || inflightFor === sessionId) return;
     const asked = sessionId;
     const seq = ++requestSeq;
+    inflightFor = asked;
+    let next;
     try {
       const result = await host.serviceRequest({ method: "GET", path: "/canvas", query: { sessionId: asked } });
-      if (seq !== requestSeq || asked !== sessionId) return;
-      view = result.status === 200 ? viewFromResponse(parseCanvasResponse(result.body)) : { kind: "failed", message: `servi\xE7o respondeu ${result.status}` };
+      next = result.status === 200 ? viewFromResponse(parseCanvasResponse(result.body)) : { kind: "failed", message: `servi\xE7o respondeu ${result.status}` };
     } catch {
-      if (seq !== requestSeq || asked !== sessionId) return;
-      view = { kind: "failed", message: "servi\xE7o indispon\xEDvel" };
+      next = { kind: "failed", message: "servi\xE7o indispon\xEDvel" };
+    } finally {
+      if (inflightFor === asked) inflightFor = null;
     }
+    if (seq !== requestSeq || asked !== sessionId) return;
+    if (next.kind === "failed" && view.kind === "canvas") return;
+    view = next;
     render();
   }
   function setSession(next) {
     if (next === sessionId) return;
     sessionId = next;
     requestSeq += 1;
+    inflightFor = null;
     view = next ? { kind: "loading" } : { kind: "no-session" };
     render();
     void refresh();

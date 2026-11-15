@@ -87,7 +87,6 @@ describe("parseCanvasHtml — malformado é recusado (RN4)", () => {
     ["< solto", "a < b"],
     ["comentário aberto", "<p>a</p><!-- x"],
     ["script não fechado", "<script>alert(1)"],
-    ["tag desconhecida→ok mas classe inválida", '<p class="Bad Class">x</p>'],
     ["data-canvas-item inválido", '<p data-canvas-item="A B">x</p>'],
     ["data-canvas-item repetido", '<p data-canvas-item="a">x</p><p data-canvas-item="a">y</p>'],
     ["caractere de controle", "<p>a\u0001b</p>"],
@@ -128,6 +127,34 @@ describe("parseCanvasHtml — malformado é recusado (RN4)", () => {
     const result = parseCanvasHtml("<div>segredo-789");
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.message.includes("segredo"), false);
+  });
+});
+
+describe("parseCanvasHtml — endurecimentos da revisão", () => {
+  it("entidade com nome do protótipo não vira código (&toString;)", () => {
+    const { tree } = ok("<p>&toString; &constructor; &__proto__;</p>");
+    assert.equal(textOf(tree), "&toString; &constructor; &__proto__;");
+  });
+
+  it("remove controles bidirecionais do texto e avisa", () => {
+    const { tree, blocked } = ok("<p>abc\u202edef</p>");
+    assert.equal(textOf(tree), "abcdef");
+    assert.deepEqual(blocked, ["controle bidirecional"]);
+  });
+
+  it("classe com maiúscula é removida e avisada, sem recusar o canvas", () => {
+    const { tree, blocked } = ok('<p class="ok Bad">x</p>');
+    const p = tree[0];
+    assert.ok(p && p.t === "el");
+    assert.equal(p.attrs.class, "ok");
+    assert.ok(blocked.some((note) => note.startsWith("classe inválida")));
+  });
+
+  it("limite de profundidade: 32 elementos com texto folha passam no parser E no validateTree", () => {
+    const nest = (n: number) => "<div>".repeat(n) + "x" + "</div>".repeat(n);
+    const fine = ok(nest(LIMITS.depth)).tree;
+    assert.notEqual(validateTree(fine), null);
+    assert.equal(parseCanvasHtml(nest(LIMITS.depth + 1)).ok, false);
   });
 });
 

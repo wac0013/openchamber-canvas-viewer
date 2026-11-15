@@ -55,6 +55,27 @@ describe("viewFromResponse", () => {
   });
 });
 
+describe("viewFromResponse — campos do serviço são validados", () => {
+  it("updatedAt inválido não vira 'Invalid Date': a resposta é recusada", () => {
+    for (const updatedAt of ["x", NaN, -1, 9e15, null]) {
+      const raw = { ...response(), canvas: { title: "T", updatedAt, tree, blocked: [] } } as unknown as CanvasResponse;
+      assert.equal(viewFromResponse(raw).kind, "failed");
+    }
+  });
+
+  it("erro com tipos errados é ignorado; mensagem e avisos longos são cortados", () => {
+    const bad = viewFromResponse(response({ error: { at: "x", message: 1 } as never }));
+    assert.equal(bad.kind === "canvas" ? bad.error : "x", null);
+    const long = viewFromResponse(response({ error: { at: 5, message: "m".repeat(1000) }, canvas: { title: "t".repeat(500), updatedAt: 5, tree, blocked: ["b".repeat(500)] } }));
+    assert.ok(long.kind === "canvas");
+    if (long.kind === "canvas") {
+      assert.equal(long.error?.message.length, 300);
+      assert.equal(long.title.length, 120);
+      assert.equal(long.blocked[0]?.length, 120);
+    }
+  });
+});
+
 describe("parseCanvasResponse", () => {
   it("aceita JSON de resposta; recusa lixo", () => {
     assert.ok(parseCanvasResponse('{"ok":true}'));

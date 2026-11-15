@@ -5,6 +5,7 @@
 // O OpenCode importa este arquivo sem node_modules ao lado: o build embute tudo
 // (só módulos "node:*" ficam de fora) e o tipo da API é declarado aqui mesmo.
 
+import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 
 import { buildSnapshot } from "../src/canvas/snapshot.ts";
@@ -36,7 +37,6 @@ export default {
       tools.add({
         name: "canvas_publish",
         description: DESCRIPTION,
-        // Oferecida direto ao modelo, fora do catálogo do Code Mode.
         options: { codemode: false },
         input: {
           type: "object",
@@ -52,16 +52,15 @@ export default {
           if (!SESSION_ID_PATTERN.test(String(context?.sessionID ?? ""))) {
             return { content: "Canvas NÃO publicado: sessão desconhecida." };
           }
-          // Cortesia ao agente: erro imediato e acionável. O serviço valida de novo.
           const built = buildSnapshot(title, html, Date.now());
           if (!built.ok) return { content: `Canvas NÃO publicado: ${built.message}. O canvas anterior foi mantido; corrija e publique de novo.` };
 
           const payload: InboxFile = { v: INBOX_SCHEMA_VERSION, sessionId: context.sessionID, title: built.snapshot.title, html: String(html) };
           const target = inboxFile(context.sessionID);
           await mkdir(inboxDir(), { recursive: true });
-          const tmp = `${target}.tmp`;
+          const tmp = `${target}.${randomUUID()}.tmp`;
           await writeFile(tmp, JSON.stringify(payload), "utf8");
-          await rename(tmp, target); // atômico: o serviço nunca lê arquivo pela metade
+          await rename(tmp, target);
 
           const blocked = built.snapshot.blocked.length ? ` Removido por segurança: ${built.snapshot.blocked.join(", ")}.` : "";
           return { content: `Canvas publicado e visível no painel.${blocked}` };
