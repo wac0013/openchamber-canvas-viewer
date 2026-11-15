@@ -4,12 +4,11 @@ import { connectHost } from "@openchamber/sdk";
 import { applyHostReady } from "@openchamber/sdk/ui";
 
 import { createActions, FAILURE_MESSAGES, type ActionResult } from "./canvas/actions.ts";
-import { createDraftController } from "./canvas/comment-draft.ts";
-import { findItem } from "./canvas/context.ts";
+import { normalizeSelection } from "./canvas/context.ts";
 import { parseCanvasResponse, viewFromResponse, type PanelView } from "./canvas/panel-state.ts";
 import { structureSignature } from "./canvas/sanitize.ts";
+import { placeToolbar } from "./canvas/toolbar-position.ts";
 import { buildNodes, formatTime } from "./canvas/view.ts";
-import { LIMITS } from "./shared/contract.ts";
 
 const POLL_MS = 1500;
 
@@ -23,7 +22,6 @@ function required(id: string): HTMLElement {
 
 const top = required("top");
 const scroll = required("scroll");
-const commentBar = required("comment-bar");
 
 let sessionId: string | null = null;
 let view: PanelView = { kind: "no-session" };
@@ -68,69 +66,91 @@ function report(result: ActionResult, done: string): void {
     void host.toast({ kind: "success", message: result.truncated ? `${done} (conteúdo truncado)` : done }).catch(() => {});
     return;
   }
-  const extra = result.attached ? " O chip já estava na caixa; o texto não foi escrito." : "";
-  void host.toast({ kind: "error", message: `${FAILURE_MESSAGES[result.reason]}${extra}` }).catch(() => {});
+  void host.toast({ kind: "error", message: FAILURE_MESSAGES[result.reason] }).catch(() => {});
 }
 
-/** Última origem de foco antes de abrir o campo: devolvido ao elemento ao cancelar. */
-let focusBeforeComment: HTMLElement | null = null;
-let barFor: object | null = null;
+/** Barra flutuante da seleção: só existe enquanto há texto do canvas selecionado. */
+const toolbar = el("div", "sel-toolbar");
+toolbar.hidden = true;
+document.body.append(toolbar);
+toolbar.addEventListener("mousedown", (event) => event.preventDefault());
 
-const draftController = createDraftController(
-  (itemId, text) => actions.comment(itemId, text),
-  () => renderCommentBar(),
-);
+type Picked = { text: string; itemId: string | null };
 
-function renderCommentBar(): void {
-  const draft = draftController.current();
-  if (!draft) {
-    barFor = null;
-    commentBar.hidden = true;
-    commentBar.replaceChildren();
-    focusBeforeComment?.focus();
-    focusBeforeComment = null;
+/** Seleção atual, se estiver inteira dentro do conteúdo do canvas (nunca do cabeçalho ou da barra). */
+function pickedSelection(): { picked: Picked; rect: DOMRect } | null {
+  const selection = document.getSelection();
+  const content = scroll.querySelector(".cv");
+  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed || !content) return null;
+  const range = selection.getRangeAt(0);
+  if (!content.contains(range.commonAncestorContainer)) return null;
+  const text = normalizeSelection(selection.toString());
+  if (!text) return null;
+  const anchor = range.commonAncestorContainer;
+  const element = anchor instanceof Element ? anchor : anchor.parentElement;
+  const itemId = element?.closest("[data-canvas-item]")?.getAttribute("data-canvas-item") ?? null;
+  const rects = range.getClientRects();
+  const rect = rects.length ? rects[rects.length - 1]! : range.getBoundingClientRect();
+  return { picked: { text, itemId }, rect };
+}
+
+function hideToolbar(): void {
+  toolbar.hidden = true;
+  toolbar.replaceChildren();
+}
+
+function clearSelection(): void {
+  document.getSelection()?.removeAllRanges();
+  hideToolbar();
+}
+
+function commentSelection(): void {
+  const found = pickedSelection();
+  if (!found) return;
+  const { text, itemId } = found.picked;
+  void actions.addToContext({ kind: "selection", text, ...(itemId ? { itemId } : {}) }).then((result) => {
+    report(result, "Trecho adicionado à caixa de mensagem. Escreva seu comentário e envie.");
+    if (result.ok) clearSelection();
+  });
+}
+
+function addSelectedElement(): void {
+  const found = pickedSelection();
+  if (!found?.picked.itemId) return;
+  const id = found.picked.itemId;
+  void actions.addToContext({ kind: "item", id }).then((result) => {
+    report(result, "Elemento adicionado ao contexto");
+    if (result.ok) clearSelection();
+  });
+}
+
+function updateToolbar(): void {
+  const found = view.kind === "canvas" && viewOwner !== null && viewOwner === sessionId ? pickedSelection() : null;
+  if (!found) {
+    if (!toolbar.hidden) hideToolbar();
     return;
   }
-  if (barFor === draft) {
-    for (const control of commentBar.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>("button, textarea")) control.disabled = draft.busy;
-    return;
+  const wanted = found.picked.itemId ? "item" : "plain";
+  if (toolbar.hidden || toolbar.dataset.mode !== wanted) {
+    toolbar.dataset.mode = wanted;
+    const buttons = [button("Comentar", "Adiciona o trecho selecionado à caixa de mensagem; escreva o comentário lá", commentSelection)];
+    if (found.picked.itemId) buttons.push(button("+ Elemento", "Adiciona o elemento inteiro ao contexto do chat", addSelectedElement));
+    toolbar.replaceChildren(...buttons);
+    toolbar.hidden = false;
   }
-  barFor = draft;
-  const input = el("textarea", "ui-input");
-  input.maxLength = LIMITS.itemTextChars;
-  input.rows = 3;
-  input.placeholder = "Escreva o comentário para o agente";
-  input.addEventListener("input", () => draftController.setText(input.value));
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") draftController.cancel();
-  });
-  const confirm = button("Adicionar à mensagem", "Escreve o comentário na caixa de mensagem, sem enviar", () => {
-    void draftController.confirm().then((result) => {
-      if (result) report(result, "Comentário adicionado à caixa de mensagem");
-    });
-  });
-  confirm.classList.add("primary");
-  const row = el("div", "ui-row");
-  row.append(confirm, button("Cancelar", "Descarta o comentário", () => draftController.cancel()));
-  commentBar.replaceChildren(el("div", "ui-label", `Comentando o elemento ${draft.itemId}`), input, row);
-  commentBar.hidden = false;
-  input.focus();
+  const size = { width: toolbar.offsetWidth, height: toolbar.offsetHeight };
+  const place = placeToolbar(found.rect, { width: window.innerWidth, height: window.innerHeight }, size);
+  toolbar.style.top = `${place.top}px`;
+  toolbar.style.left = `${place.left}px`;
 }
 
-function openComment(itemId: string, origin: HTMLElement | null): void {
-  if (view.kind !== "canvas" || !viewOwner || viewOwner !== sessionId || !findItem(view.tree, itemId)) return;
-  focusBeforeComment = origin;
-  draftController.open(viewOwner, itemId);
-}
-
-function decorateItem(element: HTMLElement, id: string): void {
-  element.tabIndex = 0;
-  const box = el("span", "ui-actions");
-  box.append(
-    button("+ Contexto", "Adicionar este elemento ao contexto do chat", () => void actions.addToContext({ kind: "item", id }).then((r) => report(r, "Elemento adicionado ao contexto"))),
-    button("Comentar", "Comentar este elemento", () => openComment(id, element)),
-  );
-  element.append(box);
+let toolbarFrame = 0;
+function scheduleToolbar(): void {
+  if (toolbarFrame) return;
+  toolbarFrame = requestAnimationFrame(() => {
+    toolbarFrame = 0;
+    updateToolbar();
+  });
 }
 
 /** Só redesenha quando o que está na tela mudou (preserva seleção; a rolagem vive em #scroll). */
@@ -168,7 +188,7 @@ function render(): void {
       if (view.error) head.push(banner("error", `Última publicação recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
       if (view.blocked.length) head.push(banner("warning", `Conteúdo bloqueado e removido: ${view.blocked.join(", ")}.`));
       const content = el("div", "cv");
-      content.append(buildNodes(view.tree, document, decorateItem));
+      content.append(buildNodes(view.tree));
       body.push(content);
       break;
     }
@@ -227,7 +247,7 @@ function setSession(next: string | null): void {
   requestSeq += 1;
   inflightFor = null;
   dirty = false;
-  draftController.sessionChanged(next);
+  hideToolbar();
   view = next ? { kind: "loading" } : { kind: "no-session" };
   viewOwner = next;
   render();
@@ -243,6 +263,10 @@ host.onServiceEvent((event) => {
   const data = event.data;
   if (event.topic === "canvas" && typeof data === "object" && data !== null && !Array.isArray(data) && data.sessionId === sessionId) void refresh();
 });
+
+document.addEventListener("selectionchange", scheduleToolbar);
+scroll.addEventListener("scroll", scheduleToolbar, { passive: true });
+window.addEventListener("resize", scheduleToolbar);
 
 polling = setInterval(() => {
   if (!document.hidden) void refresh();

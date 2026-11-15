@@ -32,7 +32,8 @@ npm test             # node --test "tests/**/*.test.ts"
 ```
 src/shared/    contrato (payload, limites, versões)
 src/canvas/    sanitize.ts (leitor estrito → árvore), snapshot.ts, panel-state.ts, view.ts,
-               context.ts (texto + chip), actions.ts (adicionar/comentar, fail-closed de sessão)
+               context.ts (texto + chip: canvas, elemento, trecho selecionado), actions.ts (adicionar ao contexto, fail-closed de sessão),
+               toolbar-position.ts (barra flutuante da seleção, sem DOM)
 src/main.ts    painel (casca)
 service/       main.ts (casca HTTP), inbox.ts (caixa de entrada), store.ts (persistência por sessão), paths.ts
 plugin/        index.ts — ferramenta canvas_publish no OpenCode (conhece context.sessionID)

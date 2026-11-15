@@ -17,20 +17,15 @@
       .banner.warning { border-color: var(--oc-warning); }
       #top { flex: none; }
       #scroll { flex: 1; overflow: auto; padding: 8px 10px 24px; }
-      #comment-bar { flex: none; border-top: 1px solid var(--oc-border); padding: 8px 10px; background: var(--oc-elevated); }
-      #comment-bar[hidden] { display: none; }
 
       /* Controles do próprio painel (prefixo ui-): nunca vêm do agente. */
       .ui-btn { font: inherit; font-size: 11px; color: inherit; background: transparent; border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 1px 6px; cursor: pointer; white-space: nowrap; }
       .ui-btn:hover { background: var(--oc-hover); }
       .ui-btn.primary { background: var(--oc-primary); color: var(--oc-primary-fg); border-color: transparent; }
-      .ui-input { width: 100%; font: inherit; color: inherit; background: var(--oc-bg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius, 6px); padding: 4px 6px; resize: vertical; }
-      .ui-label { color: var(--oc-muted); font-size: 11px; margin-bottom: 4px; }
-      .ui-row { display: flex; gap: 6px; margin-top: 6px; }
-      .ui-actions { display: none; position: absolute; top: 2px; right: 2px; gap: 4px; z-index: 1; }
-      .cv [data-canvas-item] { position: relative; outline: 1px dashed transparent; }
-      .cv [data-canvas-item]:hover, .cv [data-canvas-item]:focus-within { outline-color: var(--oc-border); }
-      .cv [data-canvas-item]:hover > .ui-actions, .cv [data-canvas-item]:focus-within > .ui-actions { display: inline-flex; }
+      .sel-toolbar { position: fixed; z-index: 10; display: flex; gap: 2px; padding: 3px; background: var(--oc-elevated); border: 1px solid var(--oc-border); border-radius: 999px; box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
+      .sel-toolbar[hidden] { display: none; }
+      .sel-toolbar .ui-btn { border-color: transparent; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+      .sel-toolbar .ui-btn:hover { background: var(--oc-hover); }
       .empty { color: var(--oc-muted); text-align: center; padding: 32px 12px; }
 
       /* Conteúdo do agente: tudo sob .cv; classes do agente chegam prefixadas com "cv-". */
@@ -62,7 +57,6 @@
     <div id="app">
       <div id="top"></div>
       <div id="scroll"></div>
-      <div id="comment-bar" hidden></div>
     </div>
     <script src="main.js"></script>
   </body>
