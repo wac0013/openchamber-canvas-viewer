@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { buildChip, DATA_NOTICE } from "../src/canvas/context.ts";
+import { buildChip, DATA_NOTICE, SELECTION_LINE } from "../src/canvas/context.ts";
 import { ALLOWED_TAGS, parseCanvasHtml } from "../src/canvas/sanitize.ts";
 import { LIMITS } from "../src/shared/contract.ts";
 
@@ -62,17 +62,20 @@ describe("skills instaláveis por `npx skills add`", () => {
     assert.equal(/^---\nname: (frontend-design|canvas)\n/m.test(text), false);
   });
 
-  it("o formato de chip descrito na skill é o que buildChip realmente produz", async () => {
+  it("os formatos de chip descritos na skill são os que buildChip realmente produz", async () => {
     const text = await readFile(path.join(skillsDir, "openchamber-canvas", "SKILL.md"), "utf8");
     const parsed = parseCanvasHtml('<p data-canvas-item="x">oi</p>');
     if (!parsed.ok) throw new Error("fixture");
-    const chip = buildChip({ title: "<título>", updatedAt: 0, tree: parsed.tree }, { kind: "item", id: "x" })?.chip.text ?? "";
-    const documented = /```\n(Canvas: [\s\S]*?)```/.exec(text)?.[1] ?? "";
-    assert.ok(documented.includes(DATA_NOTICE), "a skill precisa citar o aviso de dados exatamente");
-    const real = chip.split("\n").map((line) => line.replace(/^(Canvas|Elemento): .*/, "$1: <…>"));
-    const doc = documented.trim().split("\n").map((line) => line.replace(/^(Canvas|Elemento): .*/, "$1: <…>"));
-    assert.deepEqual(real.slice(0, 4), doc.slice(0, 4));
-    assert.equal(real[4], "oi");
+    const canvas = { title: "<título>", updatedAt: 0, tree: parsed.tree };
+    const blocks = [...text.matchAll(/```\n(Canvas: [\s\S]*?)```/g)].map((match) => match[1]!.trim().split("\n"));
+    assert.equal(blocks.length, 2, "a skill documenta o chip de elemento e o de trecho");
+    const generic = (lines: string[]) => lines.map((line) => line.replace(/^(Canvas|Elemento): .*/, "$1: <…>"));
+    const item = generic((buildChip(canvas, { kind: "item", id: "x" })?.chip.text ?? "").split("\n"));
+    const selection = generic((buildChip(canvas, { kind: "selection", text: "oi", itemId: "x" })?.chip.text ?? "").split("\n"));
+    assert.deepEqual(generic(blocks[0]!.slice(0, -1)), item.slice(0, -1));
+    assert.deepEqual(generic(blocks[1]!.slice(0, -1)), selection.slice(0, -1));
+    assert.ok(blocks[1]!.includes(SELECTION_LINE));
+    assert.ok(blocks.every((lines) => lines.includes(DATA_NOTICE)));
   });
 
   it("as tags documentadas na skill são exatamente as que o sanitizador aceita", async () => {

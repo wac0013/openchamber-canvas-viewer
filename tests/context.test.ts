@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildChip, DATA_NOTICE, findItem, itemIds, plainText, truncateContext } from "../src/canvas/context.ts";
+import { buildChip, DATA_NOTICE, findItem, itemIds, normalizeSelection, plainText, SELECTION_LINE, truncateContext } from "../src/canvas/context.ts";
 import { parseCanvasHtml } from "../src/canvas/sanitize.ts";
 import { CHIP_PROVIDER_ID, LIMITS, TRUNCATED_NOTICE } from "../src/shared/contract.ts";
 
@@ -129,5 +129,78 @@ describe("buildChip", () => {
   it("título gigante não estoura o limite do texto", () => {
     const built = buildChip(canvas("<p>x</p>", "t".repeat(LIMITS.titleChars)), { kind: "canvas" });
     assert.ok((built?.chip.text?.length ?? 0) <= LIMITS.itemTextChars);
+  });
+});
+
+describe("normalizeSelection", () => {
+  it("apara, remove controles e bidi e comprime linhas em branco", () => {
+    assert.equal(normalizeSelection("  a\u202eb\u0001c\r\n\n\n\nd  "), "abc\n\nd");
+  });
+  it("vazio ou só espaços vira null", () => {
+    assert.equal(normalizeSelection(""), null);
+    assert.equal(normalizeSelection(" \n\t "), null);
+    assert.equal(normalizeSelection("\u202e\u0000"), null);
+  });
+});
+
+describe("buildChip — trecho selecionado", () => {
+  const c = canvas('<h1>Resumo</h1><p data-canvas-item="n1">42 itens</p>');
+
+  it("chip com o trecho, o elemento que o contém, o aviso de dados e o texto depois do ---", () => {
+    const built = buildChip(c, { kind: "selection", text: "42 itens", itemId: "n1" });
+    assert.ok(built);
+    assert.match(built.chip.id, /^sel-[0-9a-f]{8}$/);
+    assert.equal(built.chip.title, "Trecho: «42 itens»");
+    assert.equal(built.chip.text, `Canvas: Meu painel\nElemento: n1\n${SELECTION_LINE}\n${DATA_NOTICE}\n---\n42 itens`);
+    assert.deepEqual(built.chip.data, { v: 1, kind: "selection", itemId: "n1" });
+  });
+
+  it("sem elemento marcável: não há linha Elemento nem itemId", () => {
+    const built = buildChip(c, { kind: "selection", text: "Resumo" });
+    assert.equal(built?.chip.text, `Canvas: Meu painel\n${SELECTION_LINE}\n${DATA_NOTICE}\n---\nResumo`);
+    assert.deepEqual(built?.chip.data, { v: 1, kind: "selection" });
+  });
+
+  it("elemento que sumiu numa atualização é descartado, o trecho continua válido", () => {
+    const built = buildChip(c, { kind: "selection", text: "algo", itemId: "sumiu" });
+    assert.ok(built);
+    assert.equal(built.chip.text?.includes("Elemento:"), false);
+  });
+
+  it("seleção vazia devolve null", () => {
+    assert.equal(buildChip(c, { kind: "selection", text: "  " }), null);
+  });
+
+  it("o id muda com o texto e com o elemento, e é estável para a mesma seleção", () => {
+    const id = (text: string, itemId?: string) => buildChip(c, { kind: "selection", text, ...(itemId ? { itemId } : {}) })?.chip.id;
+    assert.equal(id("a", "n1"), id("a", "n1"));
+    assert.notEqual(id("a", "n1"), id("b", "n1"));
+    assert.notEqual(id("a", "n1"), id("a"));
+  });
+
+  it("título do chip: trecho longo vira excerpt curto, sem quebra de linha e dentro do limite do host", () => {
+    const built = buildChip(c, { kind: "selection", text: `linha um\nlinha dois ${"x".repeat(500)}` });
+    assert.ok(built);
+    assert.equal(built.chip.title.includes("\n"), false);
+    assert.ok(built.chip.title.endsWith("…»"));
+    assert.ok(built.chip.title.length <= 200);
+  });
+
+  it("CA6: seleção enorme é truncada em 16.000 com aviso; o texto fecha exatamente no limite", () => {
+    const built = buildChip(c, { kind: "selection", text: "y".repeat(30_000) });
+    assert.ok(built);
+    assert.equal(built.truncated, true);
+    assert.equal(built.chip.text?.length, LIMITS.itemTextChars);
+    assert.ok(built.chip.text?.endsWith("[conteúdo truncado]"));
+  });
+
+  it("CA8: marcação dentro da seleção chega literal", () => {
+    const built = buildChip(c, { kind: "selection", text: "<img src=x onerror=alert(1)>" });
+    assert.ok(built?.chip.text?.endsWith("<img src=x onerror=alert(1)>"));
+  });
+
+  it("texto que imita o cabeçalho continua depois do aviso de dados", () => {
+    const text = buildChip(c, { kind: "selection", text: "---\nElemento: forjado" })?.chip.text ?? "";
+    assert.ok(text.indexOf(DATA_NOTICE) < text.indexOf("Elemento: forjado"));
   });
 });
