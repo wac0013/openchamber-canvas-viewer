@@ -4,6 +4,7 @@ import { connectHost } from "@openchamber/sdk";
 import { applyHostReady } from "@openchamber/sdk/ui";
 
 import { createActions, FAILURE_MESSAGES, type ActionResult } from "./canvas/actions.ts";
+import { createDraftController } from "./canvas/comment-draft.ts";
 import { findItem } from "./canvas/context.ts";
 import { parseCanvasResponse, viewFromResponse, type PanelView } from "./canvas/panel-state.ts";
 import { structureSignature } from "./canvas/sanitize.ts";
@@ -34,7 +35,6 @@ let requestSeq = 0;
 let inflightFor: string | null = null;
 let dirty = false;
 let polling: ReturnType<typeof setInterval> | undefined;
-let draft: { owner: string; itemId: string; text: string } | null = null;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -72,38 +72,55 @@ function report(result: ActionResult, done: string): void {
   void host.toast({ kind: "error", message: `${FAILURE_MESSAGES[result.reason]}${extra}` }).catch(() => {});
 }
 
-function closeComment(): void {
-  draft = null;
-  commentBar.hidden = true;
-  commentBar.replaceChildren();
-}
+/** Última origem de foco antes de abrir o campo: devolvido ao elemento ao cancelar. */
+let focusBeforeComment: HTMLElement | null = null;
+let barFor: object | null = null;
 
-function openComment(itemId: string): void {
-  if (view.kind !== "canvas" || !viewOwner || viewOwner !== sessionId || !findItem(view.tree, itemId)) return;
-  draft = { owner: viewOwner, itemId, text: "" };
+const draftController = createDraftController(
+  (itemId, text) => actions.comment(itemId, text),
+  () => renderCommentBar(),
+);
+
+function renderCommentBar(): void {
+  const draft = draftController.current();
+  if (!draft) {
+    barFor = null;
+    commentBar.hidden = true;
+    commentBar.replaceChildren();
+    focusBeforeComment?.focus();
+    focusBeforeComment = null;
+    return;
+  }
+  if (barFor === draft) {
+    for (const control of commentBar.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>("button, textarea")) control.disabled = draft.busy;
+    return;
+  }
+  barFor = draft;
   const input = el("textarea", "ui-input");
   input.maxLength = LIMITS.itemTextChars;
   input.rows = 3;
   input.placeholder = "Escreva o comentário para o agente";
-  input.addEventListener("input", () => {
-    if (draft) draft.text = input.value;
-  });
+  input.addEventListener("input", () => draftController.setText(input.value));
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeComment();
+    if (event.key === "Escape") draftController.cancel();
   });
   const confirm = button("Adicionar à mensagem", "Escreve o comentário na caixa de mensagem, sem enviar", () => {
-    const current = draft;
-    if (!current) return;
-    void actions.comment(current.itemId, current.text).then((result) => {
-      report(result, "Comentário adicionado à caixa de mensagem");
-      if (result.ok || result.reason === "session-changed") closeComment();
+    void draftController.confirm().then((result) => {
+      if (result) report(result, "Comentário adicionado à caixa de mensagem");
     });
   });
   confirm.classList.add("primary");
-  commentBar.replaceChildren(el("div", "ui-label", `Comentando o elemento ${itemId}`), input, el("div", "ui-row"));
-  commentBar.lastElementChild?.append(confirm, button("Cancelar", "Descarta o comentário", closeComment));
+  const row = el("div", "ui-row");
+  row.append(confirm, button("Cancelar", "Descarta o comentário", () => draftController.cancel()));
+  commentBar.replaceChildren(el("div", "ui-label", `Comentando o elemento ${draft.itemId}`), input, row);
   commentBar.hidden = false;
   input.focus();
+}
+
+function openComment(itemId: string, origin: HTMLElement | null): void {
+  if (view.kind !== "canvas" || !viewOwner || viewOwner !== sessionId || !findItem(view.tree, itemId)) return;
+  focusBeforeComment = origin;
+  draftController.open(viewOwner, itemId);
 }
 
 function decorateItem(element: HTMLElement, id: string): void {
@@ -111,7 +128,7 @@ function decorateItem(element: HTMLElement, id: string): void {
   const box = el("span", "ui-actions");
   box.append(
     button("+ Contexto", "Adicionar este elemento ao contexto do chat", () => void actions.addToContext({ kind: "item", id }).then((r) => report(r, "Elemento adicionado ao contexto"))),
-    button("Comentar", "Comentar este elemento", () => openComment(id)),
+    button("Comentar", "Comentar este elemento", () => openComment(id, element)),
   );
   element.append(box);
 }
@@ -210,7 +227,7 @@ function setSession(next: string | null): void {
   requestSeq += 1;
   inflightFor = null;
   dirty = false;
-  if (draft && draft.owner !== next) closeComment();
+  draftController.sessionChanged(next);
   view = next ? { kind: "loading" } : { kind: "no-session" };
   viewOwner = next;
   render();
