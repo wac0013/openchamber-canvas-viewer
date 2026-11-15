@@ -66,8 +66,8 @@ describe("plugin canvas_publish", () => {
     const tool = await loadTool();
     const result = await tool.execute({ html: '<p onclick="x()">a</p><script>1</script>' }, { sessionID: "ses_abc" });
     assert.match(result.content, /publicado/);
-    assert.match(result.content, /<script>/);
-    assert.match(result.content, /on\*/);
+    assert.ok(result.content.includes("<script>"));
+    assert.ok(result.content.includes("on*"));
   });
 
   it("recusa sessão com id que não seja nome de arquivo seguro", async () => {
