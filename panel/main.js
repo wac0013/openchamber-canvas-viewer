@@ -1979,7 +1979,7 @@ ${UI_SIZE_CSS}
 ${GUEST_UI_LOOK_CSS}`;
 
   // src/shared/contract.ts
-  var SERVICE_VERSION = 1;
+  var SERVICE_VERSION = 2;
   var LIMITS = {
     /** Tamanho máximo do HTML publicado pelo agente. */
     htmlChars: 2e5,
@@ -1994,6 +1994,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var CHIP_PROVIDER_ID = "canvas-viewer";
   var CHIP_URL = "https://github.com/wac0013/openchamber-canvas-viewer";
   var TRUNCATED_NOTICE = "\n[conte\xFAdo truncado]";
+  var UPDATE_REQUEST_MARKER = "[Painel Canvas \xB7 Atualizar]";
+  var UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o canvas desta conversa: publique de novo com canvas_publish, refletindo o estado atual do trabalho e mantendo os mesmos ids de elemento. N\xE3o repita a visualiza\xE7\xE3o no chat; responda s\xF3 com um resumo curto do que mudou.`;
 
   // src/canvas/context.ts
   var SELECTION_LINE = "Trecho selecionado pelo usu\xE1rio no canvas.";
@@ -2322,6 +2324,44 @@ ${GUEST_UI_LOOK_CSS}`;
     return isEpoch(error.at) && typeof error.message === "string" ? { at: error.at, message: error.message.slice(0, 300) } : null;
   }
 
+  // src/canvas/update-request.ts
+  var UPDATE_MESSAGES = {
+    busy: { kind: "info", message: "O agente j\xE1 est\xE1 trabalhando. O canvas \xE9 atualizado quando ele publicar." },
+    waiting: { kind: "info", message: "O agente est\xE1 esperando uma resposta sua. Responda e, se precisar, pe\xE7a de novo." },
+    "too-soon": { kind: "info", message: "O pedido acabou de ser enviado. Aguarde alguns segundos." },
+    "not-granted": { kind: "error", message: "Reaprove a extens\xE3o em Settings \u2192 Extensions: ela agora precisa da permiss\xE3o de controle de sess\xE3o." },
+    "service-outdated": { kind: "error", message: "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions." },
+    "host-refused": { kind: "error", message: "O OpenChamber recusou o pedido. Tente de novo." },
+    unconfirmed: { kind: "error", message: "N\xE3o foi poss\xEDvel confirmar o envio. Confira o chat antes de pedir de novo." },
+    "invalid-session": { kind: "error", message: "Sess\xE3o inv\xE1lida. Reabra a sess\xE3o e tente de novo." },
+    unavailable: { kind: "error", message: "N\xE3o foi poss\xEDvel falar com o servi\xE7o da extens\xE3o." }
+  };
+  var UPDATE_SENT_MESSAGE = "Pedido de atualiza\xE7\xE3o enviado ao agente.";
+  var CODES = /* @__PURE__ */ new Set(["busy", "waiting", "too-soon", "not-granted", "host-refused", "invalid-session", "unconfirmed"]);
+  function parse(body) {
+    try {
+      const value = JSON.parse(body);
+      if (value.ok === true) return { ok: true };
+      if (value.ok === false && typeof value.code === "string" && CODES.has(value.code)) return { ok: false, code: value.code };
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  async function requestCanvasUpdate(host2, sessionId2) {
+    let result;
+    try {
+      result = await host2.serviceRequest({ method: "POST", path: "/update-request", body: JSON.stringify({ sessionId: sessionId2 }) });
+    } catch {
+      return { ok: false, reason: "unavailable" };
+    }
+    if (result.status === 404) return { ok: false, reason: "service-outdated" };
+    const parsed = parse(result.body);
+    if (parsed?.ok) return { ok: true };
+    if (parsed) return { ok: false, reason: parsed.code };
+    return { ok: false, reason: "unavailable" };
+  }
+
   // src/canvas/toolbar-position.ts
   var GAP = 6;
   var EDGE = 4;
@@ -2380,6 +2420,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var inflightFor = null;
   var dirty = false;
   var polling;
+  var updating = false;
   function el2(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -2411,6 +2452,23 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     void host.toast({ kind: "error", message: FAILURE_MESSAGES[result.reason] }).catch(() => {
     });
+  }
+  function requestUpdate() {
+    if (updating || view.kind !== "canvas" || !viewOwner) return;
+    const owner = viewOwner;
+    updating = true;
+    setUpdateButton();
+    void requestCanvasUpdate(host, owner).then((result) => {
+      updating = false;
+      setUpdateButton();
+      const shown = result.ok ? { kind: "success", message: UPDATE_SENT_MESSAGE } : UPDATE_MESSAGES[result.reason];
+      void host.toast(shown).catch(() => {
+      });
+    });
+  }
+  function setUpdateButton() {
+    const node = document.getElementById("btn-update");
+    if (node instanceof HTMLButtonElement) node.disabled = updating;
   }
   var toolbar = el2("div", "sel-toolbar");
   toolbar.hidden = true;
@@ -2520,11 +2578,16 @@ ${GUEST_UI_LOOK_CSS}`;
         break;
       case "canvas": {
         const header = el2("header");
-        header.append(
-          el2("h1", void 0, view.title || "Canvas"),
+        const update = button2("Atualizar", "Pede ao agente para atualizar o canvas. O ideal \xE9 a atualiza\xE7\xE3o autom\xE1tica; use quando ela n\xE3o acontecer.", requestUpdate);
+        update.id = "btn-update";
+        update.disabled = updating;
+        const tools = el2("div", "header-tools");
+        tools.append(
           el2("time", void 0, `Atualizado \xE0s ${formatTime(view.updatedAt)}`),
+          update,
           button2("+ Contexto", "Adicionar o canvas inteiro ao contexto do chat", () => void actions.addToContext({ kind: "canvas" }).then((r) => report(r, "Canvas adicionado ao contexto")))
         );
+        header.append(el2("h1", void 0, view.title || "Canvas"), tools);
         head.push(header);
         if (view.outdatedService) head.push(banner("warning", "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions."));
         if (view.error) head.push(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));

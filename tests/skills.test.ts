@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildChip, DATA_NOTICE, SELECTION_LINE } from "../src/canvas/context.ts";
 import { ALLOWED_TAGS, parseCanvasHtml } from "../src/canvas/sanitize.ts";
-import { LIMITS } from "../src/shared/contract.ts";
+import { LIMITS, UPDATE_REQUEST_MARKER, UPDATE_REQUEST_TEXT } from "../src/shared/contract.ts";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsDir = path.join(root, "skills");
@@ -76,6 +76,16 @@ describe("skills instaláveis por `npx skills add`", () => {
     assert.deepEqual(generic(blocks[1]!.slice(0, -1)), selection.slice(0, -1));
     assert.ok(blocks[1]!.includes(SELECTION_LINE));
     assert.ok(blocks.every((lines) => lines.includes(DATA_NOTICE)));
+  });
+
+  it("o marcador do pedido do botão Atualizar na skill é o que o serviço realmente envia", async () => {
+    const text = await readFile(path.join(skillsDir, "openchamber-canvas", "SKILL.md"), "utf8");
+    assert.ok(UPDATE_REQUEST_TEXT.startsWith(UPDATE_REQUEST_MARKER));
+    const documented = /```\n(\[Painel Canvas[^\n]*)\n```/.exec(text)?.[1] ?? "";
+    assert.ok(documented.startsWith(UPDATE_REQUEST_MARKER), "a skill precisa citar o marcador exatamente");
+    const intro = documented.replace(/ …$/, "");
+    assert.ok(UPDATE_REQUEST_TEXT.startsWith(intro.slice(0, UPDATE_REQUEST_MARKER.length + 30)), "o início citado bate com o texto real");
+    for (const rule of ["pedido formal do usuário", "mesmo que ache que nada mudou", "mesmos ids", "início de uma mensagem do próprio usuário"]) assert.ok(text.includes(rule), rule);
   });
 
   it("as tags documentadas na skill são exatamente as que o sanitizador aceita", async () => {
