@@ -9,6 +9,7 @@ import { buildEmbedDocument, EMBED_SANDBOX, EMBED_THEME_VARS, hasUserGesture, re
 import { collectFilterItems, groupsOf, isFiltering, NO_FILTER, shouldOfferFilter, visibleIds, type FilterItem, type FilterState } from "./canvas/filter.ts";
 import { parseCanvasResponse, viewFromResponse, type PanelView } from "./canvas/panel-state.ts";
 import { cleanHref, structureSignature } from "./canvas/sanitize.ts";
+import { requestCanvasUpdate, UPDATE_MESSAGES, UPDATE_SENT_MESSAGE } from "./canvas/update-request.ts";
 import { isInView, placeToolbar } from "./canvas/toolbar-position.ts";
 import { buildNodes, formatTime, LINK_ATTRIBUTE } from "./canvas/view.ts";
 
@@ -37,6 +38,8 @@ let requestSeq = 0;
 let inflightFor: string | null = null;
 let dirty = false;
 let polling: ReturnType<typeof setInterval> | undefined;
+/** Há um pedido de atualização em voo: o botão fica desabilitado até a resposta. */
+let updating = false;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -71,6 +74,28 @@ function report(result: ActionResult, done: string): void {
     return;
   }
   void host.toast({ kind: "error", message: FAILURE_MESSAGES[result.reason] }).catch(() => {});
+}
+
+/**
+ * Botão Atualizar: pede ao agente que republique o canvas. O ideal é a atualização automática;
+ * isto é o pedido formal do usuário. O pedido vai para a sessão dona do canvas exibido (id explícito).
+ */
+function requestUpdate(): void {
+  if (updating || view.kind !== "canvas" || !viewOwner) return;
+  const owner = viewOwner;
+  updating = true;
+  setUpdateButton();
+  void requestCanvasUpdate(host, owner).then((result) => {
+    updating = false;
+    setUpdateButton();
+    const shown = result.ok ? { kind: "success" as const, message: UPDATE_SENT_MESSAGE } : UPDATE_MESSAGES[result.reason];
+    void host.toast(shown).catch(() => {});
+  });
+}
+
+function setUpdateButton(): void {
+  const node = document.getElementById("btn-update");
+  if (node instanceof HTMLButtonElement) node.disabled = updating;
 }
 
 /** Barra flutuante da seleção: só existe enquanto há texto do canvas selecionado. */
@@ -339,11 +364,16 @@ function render(): void {
       break;
     case "canvas": {
       const header = el("header");
-      header.append(
-        el("h1", undefined, view.title || "Canvas"),
+      const update = button("Atualizar", "Pede ao agente para atualizar o canvas. O ideal é a atualização automática; use quando ela não acontecer.", requestUpdate);
+      update.id = "btn-update";
+      update.disabled = updating;
+      const tools = el("div", "header-tools");
+      tools.append(
         el("time", undefined, `Atualizado às ${formatTime(view.updatedAt)}`),
+        update,
         button("+ Contexto", "Adicionar o canvas inteiro ao contexto do chat", () => void actions.addToContext({ kind: "canvas" }).then((r) => report(r, "Canvas adicionado ao contexto"))),
       );
+      header.append(el("h1", undefined, view.title || "Canvas"), tools);
       head.push(header);
       if (view.outdatedService) head.push(banner("warning", "O serviço da extensão está desatualizado: pause e retome a extensão em Settings → Extensions."));
       if (view.error) head.push(banner("error", `Última publicação recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));

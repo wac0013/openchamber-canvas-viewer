@@ -267,7 +267,7 @@ var SURFACE_CONTROLLERS = ["none", "agent", "user"];
 var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
 
 // src/shared/contract.ts
-var SERVICE_VERSION = 2;
+var SERVICE_VERSION = 3;
 var INBOX_SCHEMA_VERSION = 1;
 var LIMITS = {
   /** Tamanho máximo do HTML publicado pelo agente. */
@@ -295,6 +295,9 @@ var LIMITS = {
 var TONES = ["neutral", "info", "success", "warning", "error"];
 var SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 var BLOCKED_NOTES_MAX = 20;
+var UPDATE_REQUEST_MARKER = "[Painel Canvas \xB7 Atualizar]";
+var UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o canvas desta conversa: publique de novo com canvas_publish, refletindo o estado atual do trabalho e mantendo os mesmos ids de elemento. N\xE3o repita a visualiza\xE7\xE3o no chat; responda s\xF3 com um resumo curto do que mudou.`;
+var UPDATE_MIN_INTERVAL_MS = 5e3;
 
 // service/inbox.ts
 import { randomUUID } from "node:crypto";
@@ -896,6 +899,59 @@ function readError(value) {
   return typeof error.at === "number" && typeof error.message === "string" ? { at: error.at, message: error.message.slice(0, 300) } : null;
 }
 
+// service/update-request.ts
+var monotonicNow = () => performance.now();
+function codeOf(error) {
+  return typeof error === "object" && error !== null && typeof error.code === "string" ? error.code : "";
+}
+function statusOf(error) {
+  return typeof error === "object" && error !== null && typeof error.status === "number" ? error.status : 0;
+}
+function refusal(error) {
+  const code = codeOf(error);
+  if (code === "NOT_GRANTED" || statusOf(error) === 403) return "not-granted";
+  if (code === "SESSION_BUSY") return "busy";
+  return "host-refused";
+}
+var unconfirmed = (error) => ["HOST_UNAVAILABLE", "HOST_TIMEOUT"].includes(codeOf(error));
+function createUpdateRequester(host2, now = monotonicNow, minIntervalMs = UPDATE_MIN_INTERVAL_MS) {
+  const reserved = /* @__PURE__ */ new Map();
+  const prune = (at) => {
+    for (const [id, when] of reserved) if (at - when >= minIntervalMs) reserved.delete(id);
+  };
+  return {
+    async request(sessionId) {
+      if (!SESSION_ID_PATTERN.test(sessionId)) return { ok: false, code: "invalid-session" };
+      const at = now();
+      prune(at);
+      if (reserved.has(sessionId)) return { ok: false, code: "too-soon" };
+      reserved.set(sessionId, at);
+      let status;
+      try {
+        status = (await host2.status(sessionId)).status;
+      } catch (error) {
+        reserved.delete(sessionId);
+        return { ok: false, code: refusal(error) };
+      }
+      if (status !== "idle") {
+        reserved.delete(sessionId);
+        return { ok: false, code: status === "waiting" ? "waiting" : "busy" };
+      }
+      try {
+        await host2.send(sessionId, UPDATE_REQUEST_TEXT);
+        return { ok: true };
+      } catch (error) {
+        if (unconfirmed(error)) {
+          reserved.set(sessionId, now());
+          return { ok: false, code: "unconfirmed" };
+        }
+        reserved.delete(sessionId);
+        return { ok: false, code: refusal(error) };
+      }
+    }
+  };
+}
+
 // service/main.ts
 var PORT = Number(process.env.OPENCHAMBER_SERVICE_PORT || 0);
 var TOKEN = process.env.OPENCHAMBER_SERVICE_TOKEN || "";
@@ -909,6 +965,11 @@ if (!PORT || !TOKEN || !DATA_DIR) {
 var store = createStore(DATA_DIR);
 var inbox = inboxDir();
 var host = createServiceHost({ env: process.env });
+var updateRequester = createUpdateRequester({
+  status: (sessionId) => host.sessions.status(sessionId),
+  send: (sessionId, prompt) => host.sessions.send(sessionId, prompt)
+});
+var UPDATE_STATUS = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502, unconfirmed: 502 };
 function authorized(header) {
   const expected = Buffer.from(`Bearer ${TOKEN}`);
   const given = Buffer.from(String(header ?? ""));
@@ -977,6 +1038,18 @@ async function route(request, response) {
     await drain();
     const record = await store.read(sessionId);
     send(response, 200, { ok: true, version: SERVICE_VERSION, canvas: record?.canvas ?? null, error: record?.error ?? null });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/update-request") {
+    let sessionId = "";
+    try {
+      const body = JSON.parse(await readBody(request));
+      sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+    } catch (error) {
+      if (error instanceof BodyTooLarge) throw error;
+    }
+    const outcome = await updateRequester.request(sessionId);
+    send(response, outcome.ok ? 200 : UPDATE_STATUS[outcome.code] ?? 502, outcome);
     return;
   }
   if (request.method === "POST" && url.pathname === "/session-events") {

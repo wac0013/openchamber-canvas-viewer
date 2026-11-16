@@ -19,11 +19,11 @@ agente ──canvas_publish(html)──▶ plugin (no OpenCode) ──arquivo─
 
 ## Instalação
 
-1. Em *Settings → Extensions → Add*, informe o diretório (ou o repositório) desta extensão e aprove as permissões. O pedido inclui *serviço local* e *plugin do OpenCode* (código que roda dentro do OpenCode com os seus direitos).
+1. Em *Settings → Extensions → Add*, informe o diretório (ou o repositório) desta extensão e aprove as permissões. O pedido inclui *serviço local*, *controle de sessão* (para o botão Atualizar) e *plugin do OpenCode* (código que roda dentro do OpenCode com os seus direitos).
 2. Abra o painel **Canvas** na barra lateral.
 3. Peça ao agente algo como: "mostre um resumo do status no canvas". Ele usará `canvas_publish`.
 
-Requer OpenChamber ≥ 2.6.1.
+Requer OpenChamber ≥ 2.7.0 (a permissão `sessionControl` do botão Atualizar não existe em versões anteriores).
 
 ## Skills para os agentes
 
@@ -58,6 +58,17 @@ Instalação manual: copie a pasta `skills/openchamber-canvas` (com `references/
 - **Partes incorporadas** (`embeds: [{ id, html }]` + `<div data-embed="id" data-height="…">texto equivalente</div>`): para SVG, gráfico de linhas, diagramas complexos e interação. O HTML da parte é completo (`<style>`, `<script>`, `<svg>`) e roda num iframe isolado — ver [Segurança](#segurança). Até 8 partes, 100 000 caracteres cada (200 000 no total). O texto dentro do `div` é a alternativa e é o que vai para o contexto do chat. As cores do tema chegam como variáveis CSS (`--oc-fg`, `--oc-primary`, `--chart-1`…).
 
 Tudo o que é executável, remoto ou de navegação **no HTML principal** é **removido** (o resto do canvas continua) e o painel e o agente são avisados do que saiu: `script`, `style`, `iframe`, `svg`, `img`, formulários, `on*`, `src`, `style=…`, `href` que não seja `http(s)`. HTML malformado (tag sem fechar, aninhamento > 32, > 5 000 nós, > 200 000 caracteres…) é **recusado por inteiro**: o canvas anterior permanece e o painel mostra o motivo.
+
+## Botão Atualizar
+
+O ideal é o agente atualizar o canvas **sozinho**, conforme avança. Quando isso não acontece, o botão **Atualizar** no cabeçalho do painel é o seu pedido formal: o OpenChamber envia ao agente, **em seu nome**, uma mensagem fixa que começa com `[Painel Canvas · Atualizar]` pedindo para republicar o canvas com o estado atual. A mensagem aparece no chat como qualquer outra, e a skill ensina o agente a reconhecê-la.
+
+- **Sessão exata:** o pedido vai para a sessão dona do canvas exibido, por id, mesmo que você troque de sessão no instante do clique.
+- **Não interrompe o agente:** se ele está trabalhando, nada é enviado (o canvas se atualiza quando ele publicar). Se ele está esperando uma resposta sua (pergunta ou permissão), nada é enviado, para não fechar a pergunta pendente.
+- **Janela residual:** o host não tem uma operação "se ocioso, envie". Entre a checagem do status e o envio (milissegundos) o agente pode passar a trabalhar, e a mensagem entra na fila dele, ou passar a esperar uma resposta sua, e o envio a fecha. Se o envio falha sem resposta utilizável, o painel avisa que **não foi possível confirmar** e o serviço mantém a vaga reservada por alguns segundos; confira o chat antes de pedir de novo.
+- **Sem acúmulo:** um pedido por vez por sessão, com intervalo mínimo de 5 s; o botão fica desabilitado enquanto o pedido está em voo.
+- **Texto fixo:** a mensagem nunca contém conteúdo do canvas (gerado por agente).
+- **Permissão nova:** para enviar com a sessão explícita, a extensão declara `sessionControl` (sem `content` nem `answers`), que aparece como linha própria no diálogo de aprovação. **Ao atualizar de uma versão anterior, reaprove a extensão** em Settings → Extensions. Enquanto não reaprovar, o botão avisa e não envia nada.
 
 ## Devolver o canvas ao chat
 
@@ -122,13 +133,17 @@ Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estr
 
 ## Changelog
 
-### 0.5.0
+### 0.6.0
 - **Links clicáveis** (`<a href>` http/https): abrem fora do painel; esquemas perigosos e credenciais na URL são removidos. O chip de trecho leva os destinos dos links.
 - **Visual**: selos e chips com tom (`data-tone`), métricas (`stat`), avisos (`callout`), linhas com informação à direita (`split`/`side`), tamanhos compactos e layout que se adapta à largura do painel. Compatível com as classes `oc-*` do render nativo do OpenChamber.
 - **Fluxogramas e gráficos sem script**: `flow`/`flow-col`/`step`, barras, proporção e colunas.
 - **Filtro** de texto e de grupo gerado pelo painel (`data-canvas-item` + `data-group`).
 - **Partes incorporadas** (`embeds` + `data-embed`): HTML completo com `<style>`, `<script>` e SVG em iframe isolado e sem rede, com tema repassado e altura automática.
-- Skill reescrita: manda considerar fluxogramas e gráficos, com referência de componentes e cinco exemplos validados. `SERVICE_VERSION` 2 (o painel avisa se o serviço estiver desatualizado).
+- Skill reescrita: manda considerar fluxogramas e gráficos, com referência de componentes e cinco exemplos validados. `SERVICE_VERSION` 3 (o painel avisa se o serviço estiver desatualizado).
+
+### 0.5.0
+- Botão **Atualizar** no cabeçalho do painel: pedido formal ao agente para republicar o canvas, enviado em nome do usuário para a sessão dona do canvas (id explícito), sem interromper o agente. A skill reconhece o pedido pelo marcador.
+- Nova permissão declarada: `sessionControl` (reaprovação necessária). Piso de versão do OpenChamber: 2.7.0. `SERVICE_VERSION` 2: um serviço antigo é sinalizado no painel.
 
 ### 0.4.0
 - Comentar passa a ser por **seleção de texto**: a barra flutuante aparece ao selecionar, e o trecho entra na caixa de mensagem como chip; o comentário é escrito no campo nativo do chat. Saíram o campo de comentário próprio e os botões que apareciam ao passar o mouse.

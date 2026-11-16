@@ -9,8 +9,9 @@
       html, body { margin: 0; padding: 0; height: 100%; }
       body { background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); font-size: 13px; line-height: 1.45; }
       #app { display: flex; flex-direction: column; height: 100%; }
-      header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--oc-border); flex: none; }
-      header h1 { font-size: 12px; font-weight: 600; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 10px; border-bottom: 1px solid var(--oc-border); flex: none; }
+      header h1 { font-size: 12px; font-weight: 600; margin: 0; flex: 1 1 16em; min-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .header-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 8px; margin-left: auto; }
       header time { color: var(--oc-muted); font-size: 11px; white-space: nowrap; }
       .banner { margin: 6px 10px 0; padding: 5px 8px; border-radius: var(--oc-radius, 6px); border: 1px solid var(--oc-border); font-size: 11px; flex: none; }
       .banner.error { border-color: var(--oc-error); color: var(--oc-error-text, var(--oc-error)); }

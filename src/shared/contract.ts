@@ -2,7 +2,7 @@
 // Mudou o formato? Suba SERVICE_VERSION, a versão do package.json e o changelog do README.
 
 /** Versão do contrato do serviço; o painel avisa quando o serviço rodando está desatualizado. */
-export const SERVICE_VERSION = 2;
+export const SERVICE_VERSION = 3;
 
 /** Versão do formato do arquivo da caixa de entrada (plugin → serviço). */
 export const INBOX_SCHEMA_VERSION = 1;
@@ -88,3 +88,20 @@ export const CHIP_PROVIDER_ID = "canvas-viewer";
 export const CHIP_URL = "https://github.com/wac0013/openchamber-canvas-viewer";
 /** Aviso final quando o contexto passa do limite do composer (RN4 da história de contexto). */
 export const TRUNCATED_NOTICE = "\n[conteúdo truncado]";
+
+/**
+ * Marcador que abre a mensagem enviada pelo botão Atualizar. A skill ensina o agente a reconhecê-lo
+ * (há teste que liga os dois): é o pedido formal do usuário para republicar o canvas.
+ */
+export const UPDATE_REQUEST_MARKER = "[Painel Canvas · Atualizar]";
+
+/** Texto fixo do pedido. Nunca inclui conteúdo do canvas (gerado por agente). */
+export const UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o canvas desta conversa: publique de novo com canvas_publish, refletindo o estado atual do trabalho e mantendo os mesmos ids de elemento. Não repita a visualização no chat; responda só com um resumo curto do que mudou.`;
+
+/** Intervalo mínimo entre dois pedidos para a mesma sessão. */
+export const UPDATE_MIN_INTERVAL_MS = 5000;
+
+/** Por que o pedido de atualização não foi enviado. Só categorias: nunca eco de conteúdo. */
+export type UpdateRequestCode = "busy" | "waiting" | "too-soon" | "not-granted" | "host-refused" | "invalid-session" | "unconfirmed";
+
+export type UpdateRequestResponse = { ok: true } | { ok: false; code: UpdateRequestCode };

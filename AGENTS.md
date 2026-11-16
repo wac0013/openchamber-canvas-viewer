@@ -33,9 +33,10 @@ npm test             # node --test "tests/**/*.test.ts"
 src/shared/    contrato (payload, limites, versões)
 src/canvas/    sanitize.ts (leitor estrito → árvore), snapshot.ts, panel-state.ts, view.ts,
                context.ts (texto + chip: canvas, elemento, trecho selecionado), actions.ts (adicionar ao contexto, fail-closed de sessão),
-               toolbar-position.ts (barra flutuante da seleção, sem DOM)
+               toolbar-position.ts (barra flutuante da seleção, sem DOM), update-request.ts (botão Atualizar, lado do painel)
 src/main.ts    painel (casca)
-service/       main.ts (casca HTTP), inbox.ts (caixa de entrada), store.ts (persistência por sessão), paths.ts
+service/       main.ts (casca HTTP), inbox.ts (caixa de entrada), store.ts (persistência por sessão), paths.ts,
+               update-request.ts (pedido de atualização ao agente: sessão explícita, não interrompe)
 plugin/        index.ts — ferramenta canvas_publish no OpenCode (conhece context.sessionID)
 skills/        <nome>/SKILL.md instaláveis por `npx skills add` (name = pasta); references/ junto
 tests/         node:test; service.e2e.test.ts sobe o serviço real
@@ -55,6 +56,7 @@ Fluxo: agente → `canvas_publish` (plugin) → arquivo na caixa de entrada → 
 - O plugin do OpenCode não pode importar pacotes externos: o build embute tudo (só `node:*` fica de fora).
 - Ações que escrevem no chat (`host.attach`) passam por `src/canvas/actions.ts`, que confere a sessão em foco imediatamente antes de cada chamada. Nunca chamar o host direto da casca do painel.
 - Skills: `name` igual à pasta, `description` sem `: ` nem ` #` (YAML sem aspas); as tags listadas na skill são exatamente as do sanitizador; as classes da skill e da descrição da ferramenta são exatamente as estilizadas no painel (o prefixo `oc-` é só alias, tratado em `view.ts`); os trechos de `references/` passam pelo sanitizador real; o formato do chip na skill vem de `context.ts` (há testes). Exemplos da skill passam pelo sanitizador real.
+- Mensagens que iniciam um turno do agente (botão Atualizar) saem pelo **serviço** com `sessions.send(sessionId, …)` e a sessão explícita, após `sessions.status`; nunca `host.prompt({ send: true })` do painel (o host envia para a sessão "atual" dele, que pode mudar no instante do clique). O texto é fixo (`UPDATE_REQUEST_TEXT`) e nunca leva conteúdo de canvas.
 - Segredos nunca no repositório.
 
 ## Convenções
