@@ -12,15 +12,57 @@ var LIMITS = {
   nodes: 5e3,
   items: 200,
   /** Texto máximo de um item marcável (limite do `host.attach`). */
-  itemTextChars: 16e3
+  itemTextChars: 16e3,
+  /** Tamanho máximo de um link (`href`). */
+  hrefChars: 2048,
+  /** Tamanho máximo do valor de `data-group` (filtro por grupo). */
+  groupChars: 60,
+  /** Quantidade de itens marcáveis a partir da qual o painel oferece o filtro de texto. */
+  filterMinItems: 6,
+  /** Partes incorporadas (HTML completo em iframe isolado): quantidade, tamanho de cada uma e total. */
+  embeds: 8,
+  embedChars: 1e5,
+  embedsTotalChars: 2e5,
+  /** Altura de uma parte incorporada, em px. */
+  embedHeightMin: 60,
+  embedHeightMax: 1200
 };
+var TONES = ["neutral", "info", "success", "warning", "error"];
 var SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 var BLOCKED_NOTES_MAX = 20;
 var UPDATE_REQUEST_MARKER = "[Painel Canvas \xB7 Atualizar]";
 var UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o canvas desta conversa: publique de novo com canvas_publish, refletindo o estado atual do trabalho e mantendo os mesmos ids de elemento. N\xE3o repita a visualiza\xE7\xE3o no chat; responda s\xF3 com um resumo curto do que mudou.`;
 
+// src/canvas/embeds.ts
+var EMBED_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+function isEmbedId(value) {
+  return typeof value === "string" && EMBED_ID.test(value);
+}
+function parseEmbedsInput(value) {
+  if (value === void 0 || value === null) return { ok: true, embeds: {} };
+  if (!Array.isArray(value)) return { ok: false, message: "embeds deve ser uma lista de { id, html }" };
+  if (value.length > LIMITS.embeds) return { ok: false, message: `mais de ${LIMITS.embeds} partes incorporadas` };
+  const embeds = {};
+  let total = 0;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return { ok: false, message: "cada embed deve ser { id, html }" };
+    const { id, html } = entry;
+    if (!isEmbedId(id)) return { ok: false, message: "id de embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)" };
+    if (Object.hasOwn(embeds, id)) return { ok: false, message: `embed repetido: ${id}` };
+    if (typeof html !== "string" || html.trim() === "") return { ok: false, message: `o embed ${id} est\xE1 vazio` };
+    if (html.length > LIMITS.embedChars) return { ok: false, message: `o embed ${id} passa de ${LIMITS.embedChars} caracteres` };
+    if (CONTROL_CHARS.test(html)) return { ok: false, message: `caractere de controle no embed ${id}` };
+    total += html.length;
+    if (total > LIMITS.embedsTotalChars) return { ok: false, message: `os embeds passam de ${LIMITS.embedsTotalChars} caracteres no total` };
+    embeds[id] = html;
+  }
+  return { ok: true, embeds };
+}
+
 // src/canvas/sanitize.ts
 var ALLOWED_TAGS = /* @__PURE__ */ new Set([
+  "a",
   "div",
   "span",
   "p",
@@ -88,11 +130,57 @@ var DROP_VOID = /* @__PURE__ */ new Set(["img", "input", "meta", "link", "base",
 var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
 var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\xA0" };
-var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+var CONTROL_CHARS2 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
 var BIDI_CHARS_ALL = /[\u202a-\u202e\u2066-\u2069]/g;
+var TONE_SET = new Set(TONES);
+var DATA_VALUE = /^(?:100(?:\.0{1,2})?|[0-9]{1,2}(?:\.[0-9]{1,2})?)$/;
+var DATA_HEIGHT = /^[0-9]{2,4}$/;
+var HREF_FORBIDDEN = /[\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 var Malformed = class extends Error {
 };
+function cleanHref(raw) {
+  const value = raw.trim();
+  if (value === "" || value.length > LIMITS.hrefChars || HREF_FORBIDDEN.test(value)) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username !== "" || url.password !== "" || url.hostname === "") return null;
+  return url.href.length <= LIMITS.hrefChars ? url.href : null;
+}
+var SIMPLE_ATTRIBUTES = /* @__PURE__ */ new Set(["title", "colspan", "rowspan", "href", "data-tone", "data-value", "data-group", "data-height"]);
+function simpleAttribute(tag, name, value) {
+  switch (name) {
+    case "title":
+      return value.slice(0, 200);
+    case "colspan":
+    case "rowspan":
+      return /^[1-9][0-9]?$/.test(value) ? value : null;
+    case "href":
+      return tag === "a" ? cleanHref(value) : null;
+    case "data-tone":
+      return TONE_SET.has(value) ? value : null;
+    case "data-value":
+      return DATA_VALUE.test(value) ? value : null;
+    case "data-group": {
+      if (BIDI_CHARS.test(value)) return null;
+      const group = value.slice(0, LIMITS.groupChars).trim();
+      return group === "" ? null : group;
+    }
+    case "data-height":
+      return DATA_HEIGHT.test(value) && Number(value) >= LIMITS.embedHeightMin && Number(value) <= LIMITS.embedHeightMax ? value : null;
+    default:
+      return null;
+  }
+}
+function blockedNote(tag, name) {
+  if (name === "href") return tag === "a" ? "link inv\xE1lido (use http:// ou https://)" : "atributo href";
+  return `atributo ${name} inv\xE1lido`;
+}
 function decodeEntities(raw) {
   return raw.replace(/&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g, (whole, body) => {
     if (body.startsWith("#")) {
@@ -115,6 +203,7 @@ function parseOrThrow(html, blocked) {
   const root = [];
   const stack = [];
   const seenItems = /* @__PURE__ */ new Set();
+  const seenEmbeds = /* @__PURE__ */ new Set();
   let nodes = 0;
   let index = 0;
   const block = (what) => {
@@ -127,7 +216,7 @@ function parseOrThrow(html, blocked) {
   const pushText = (raw) => {
     if (!raw) return;
     let value = decodeEntities(raw);
-    if (CONTROL_CHARS.test(value)) throw new Malformed("caractere de controle no texto");
+    if (CONTROL_CHARS2.test(value)) throw new Malformed("caractere de controle no texto");
     if (BIDI_CHARS.test(value)) {
       block("controle bidirecional");
       value = value.replace(BIDI_CHARS_ALL, "");
@@ -140,7 +229,7 @@ function parseOrThrow(html, blocked) {
     for (const match of raw.matchAll(ATTRIBUTE)) {
       const name = (match[1] ?? "").toLowerCase();
       const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? "");
-      if (CONTROL_CHARS.test(value)) throw new Malformed(`caractere inv\xE1lido no atributo "${name}"`);
+      if (CONTROL_CHARS2.test(value)) throw new Malformed(`caractere inv\xE1lido no atributo "${name}"`);
       switch (name) {
         case "class": {
           const tokens = value.split(/\s+/).filter(Boolean);
@@ -149,14 +238,6 @@ function parseOrThrow(html, blocked) {
           if (valid.length) attrs.class = valid.join(" ");
           break;
         }
-        case "title":
-          attrs.title = value.slice(0, 200);
-          break;
-        case "colspan":
-        case "rowspan":
-          if (/^[1-9][0-9]?$/.test(value)) attrs[name] = value;
-          else block(`atributo ${name} inv\xE1lido`);
-          break;
         case "data-canvas-item":
           if (!ITEM_ID.test(value)) throw new Malformed("data-canvas-item inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)");
           if (seenItems.has(value)) throw new Malformed(`data-canvas-item repetido: ${value}`);
@@ -164,8 +245,25 @@ function parseOrThrow(html, blocked) {
           seenItems.add(value);
           attrs["data-canvas-item"] = value;
           break;
+        case "data-embed":
+          if (tag !== "div") {
+            block("data-embed fora de <div>");
+            break;
+          }
+          if (!ITEM_ID.test(value)) throw new Malformed("data-embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)");
+          if (seenEmbeds.has(value)) throw new Malformed(`data-embed repetido: ${value}`);
+          if (seenEmbeds.size >= LIMITS.embeds) throw new Malformed(`mais de ${LIMITS.embeds} partes incorporadas`);
+          seenEmbeds.add(value);
+          attrs["data-embed"] = value;
+          break;
         default:
-          block(`atributo ${name.startsWith("on") ? "on*" : name}`);
+          if (SIMPLE_ATTRIBUTES.has(name)) {
+            const clean = simpleAttribute(tag, name, value);
+            if (clean === null) block(blockedNote(tag, name));
+            else attrs[name] = clean;
+          } else {
+            block(`atributo ${name.startsWith("on") ? "on*" : name}`);
+          }
       }
     }
     return attrs;
@@ -246,11 +344,12 @@ function validateTree(value) {
   let nodes = 0;
   let items = 0;
   const seen = /* @__PURE__ */ new Set();
+  const embeds = /* @__PURE__ */ new Set();
   const walk = (raw, depth) => {
     if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
     const node = raw;
     if (node.t === "text") {
-      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
+      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS2.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
     }
     if (depth > LIMITS.depth) return null;
     if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
@@ -262,15 +361,16 @@ function validateTree(value) {
         const tokens = attr.split(/\s+/).filter(Boolean);
         if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
         attrs.class = tokens.join(" ");
-      } else if (name === "title") {
-        if (attr.length > 200) return null;
-        attrs.title = attr;
-      } else if (name === "colspan" || name === "rowspan") {
-        if (!/^[1-9][0-9]?$/.test(attr)) return null;
-        attrs[name] = attr;
       } else if (name === "data-canvas-item") {
         if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
         seen.add(attr);
+        attrs[name] = attr;
+      } else if (name === "data-embed") {
+        if (node.tag !== "div" || !ITEM_ID.test(attr) || embeds.has(attr) || embeds.size >= LIMITS.embeds) return null;
+        embeds.add(attr);
+        attrs[name] = attr;
+      } else if (SIMPLE_ATTRIBUTES.has(name)) {
+        if (simpleAttribute(node.tag, name, attr) !== attr) return null;
         attrs[name] = attr;
       } else {
         return null;
@@ -294,17 +394,40 @@ function validateTree(value) {
   }
   return tree;
 }
+function embedIds(nodes) {
+  const ids = [];
+  const walk = (list) => {
+    for (const node of list) {
+      if (node.t !== "el") continue;
+      const id = node.attrs["data-embed"];
+      if (id) ids.push(id);
+      walk(node.c);
+    }
+  };
+  walk(nodes);
+  return ids;
+}
 
 // src/canvas/snapshot.ts
 var TITLE_STRIP = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
-function buildSnapshot(title, html, now) {
+function buildSnapshot(title, html, now, embedsInput) {
   const cleanTitle = typeof title === "string" ? title.replace(TITLE_STRIP, " ").trim().slice(0, LIMITS.titleChars) : "";
   const parsed = parseCanvasHtml(html);
   if (!parsed.ok) return { ok: false, message: parsed.message };
+  const sent = parseEmbedsInput(embedsInput);
+  if (!sent.ok) return { ok: false, message: sent.message };
   if (parsed.tree.length === 0) return { ok: false, message: "o canvas est\xE1 vazio" };
   const tree = validateTree(parsed.tree);
   if (!tree) return { ok: false, message: "o canvas excede os limites de estrutura" };
-  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: parsed.blocked } };
+  const used = new Set(embedIds(tree));
+  const embeds = {};
+  const blocked = [...parsed.blocked];
+  for (const [id, body] of Object.entries(sent.embeds)) {
+    if (used.has(id)) embeds[id] = body;
+    else blocked.push(`embed sem uso: ${id}`);
+  }
+  for (const id of used) if (!Object.hasOwn(embeds, id)) blocked.push(`data-embed sem conte\xFAdo: ${id}`);
+  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: blocked.slice(0, BLOCKED_NOTES_MAX), embeds } };
 }
 
 // service/paths.ts
@@ -324,9 +447,12 @@ function inboxFile(sessionId, env = process.env) {
 var DESCRIPTION = [
   "Publica ou atualiza o Canvas desta conversa: um painel lateral do OpenChamber que o usu\xE1rio v\xEA atualizar em tempo real.",
   "Cada chamada SUBSTITUI o canvas anterior (s\xF3 existe um por conversa) \u2014 reenvie o HTML completo.",
-  "`html` \xE9 um fragmento HTML est\xE1tico. Tags permitidas: div, span, p, h1-h6, ul/ol/li, dl/dt/dd, table/thead/tbody/tr/th/td, blockquote, pre, code, strong/b, em/i, br, hr, section, article, details/summary, figure/figcaption.",
-  'Atributos permitidos: class (nomes [a-z][a-z0-9-]; estilos prontos: card, row, grid, grid-2, grid-3, muted, ok, warn, err, info, badge, mono, small, big, center, right), title, colspan, rowspan e data-canvas-item="<id>" para marcar um elemento que o usu\xE1rio pode adicionar ao contexto ou comentar (id [a-z0-9-], \xFAnico).',
-  "Sem script, style, link, imagem, iframe, formul\xE1rio nem atributo on*/href/src/style: isso \xE9 removido e informado no retorno. HTML malformado \xE9 recusado e o canvas anterior permanece."
+  "`html` \xE9 um fragmento HTML est\xE1tico. Tags permitidas: a, div, span, p, h1-h6, ul/ol/li, dl/dt/dd, table/thead/tbody/tr/th/td, blockquote, pre, code, strong/b, em/i, br, hr, section, article, details/summary, figure/figcaption.",
+  'Links: <a href="https://\u2026"> (s\xF3 http/https, clic\xE1veis; qualquer outro esquema \xE9 removido).',
+  'Atributos permitidos: class (nomes [a-z][a-z0-9-]; estilos prontos: card, row, grid, grid-2, grid-3, muted, ok, warn, err, info, badge, mono, small, big, center, right, box, stat, stat-value, stat-label, callout, callout-title, chip, dot, rows, split, side, num, table, bar, chart, chart-row, chart-label, chart-value, stack, seg, columns, col, col-track, col-bar, col-label, flow, flow-col, step, step-title), com o prefixo oc- do render nativo do OpenChamber tamb\xE9m valendo; data-tone (neutral|info|success|warning|error: colore badge, chip, stat, callout, step, bar, seg); data-value (0 a 100, para bar/seg/col-bar); title, colspan, rowspan e data-canvas-item="<id>" para marcar um elemento que o usu\xE1rio pode adicionar ao contexto, comentar e filtrar (id [a-z0-9-], \xFAnico); data-group="<nome>" agrupa itens para o filtro do painel.',
+  "O painel mostra sozinho um filtro de texto/grupo quando h\xE1 6+ itens marcados. Prefira fluxogramas (flow/step) e gr\xE1ficos (chart, stack, columns) quando ajudarem a entender.",
+  'Visual que o HTML acima n\xE3o cobre (gr\xE1fico de linhas, SVG, diagrama complexo, interatividade): passe `embeds` ([{ id, html }]; HTML completo com style/script/svg, em iframe isolado sem rede, at\xE9 8 partes) e use <div data-embed="<id>" data-height="<px opcional>">texto equivalente</div> no html.',
+  "Sem script, style, link, imagem, iframe, formul\xE1rio nem atributo on*/src/style no `html`: isso \xE9 removido e informado no retorno. HTML malformado \xE9 recusado e o canvas anterior permanece."
 ].join(" ");
 var index_default = {
   id: "openchamber-canvas-viewer",
@@ -340,25 +466,44 @@ var index_default = {
           type: "object",
           properties: {
             html: { type: "string", description: `HTML do canvas (at\xE9 ${LIMITS.htmlChars} caracteres)` },
-            title: { type: "string", description: `T\xEDtulo curto do canvas (at\xE9 ${LIMITS.titleChars} caracteres)` }
+            title: { type: "string", description: `T\xEDtulo curto do canvas (at\xE9 ${LIMITS.titleChars} caracteres)` },
+            embeds: {
+              type: "array",
+              description: `Partes incorporadas (at\xE9 ${LIMITS.embeds}): HTML completo, desenhado num iframe isolado sem rede; referenciado no html por <div data-embed="id">`,
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "Id [a-z0-9-], at\xE9 40 caracteres, igual ao data-embed do html" },
+                  html: { type: "string", description: `HTML da parte (at\xE9 ${LIMITS.embedChars} caracteres; style, script e svg valem)` }
+                },
+                required: ["id", "html"],
+                additionalProperties: false
+              }
+            }
           },
           required: ["html"],
           additionalProperties: false
         },
         async execute(input, context) {
-          const { html, title } = input && typeof input === "object" ? input : {};
+          const { html, title, embeds } = input && typeof input === "object" ? input : {};
           if (!SESSION_ID_PATTERN.test(String(context?.sessionID ?? ""))) {
             return { content: "Canvas N\xC3O publicado: sess\xE3o desconhecida." };
           }
-          const built = buildSnapshot(title, html, Date.now());
+          const built = buildSnapshot(title, html, Date.now(), embeds);
           if (!built.ok) return { content: `Canvas N\xC3O publicado: ${built.message}. O canvas anterior foi mantido; corrija e publique de novo.` };
-          const payload = { v: INBOX_SCHEMA_VERSION, sessionId: context.sessionID, title: built.snapshot.title, html: String(html) };
+          const payload = {
+            v: INBOX_SCHEMA_VERSION,
+            sessionId: context.sessionID,
+            title: built.snapshot.title,
+            html: String(html),
+            ...Object.keys(built.snapshot.embeds).length ? { embeds: Object.entries(built.snapshot.embeds).map(([id, body]) => ({ id, html: body })) } : {}
+          };
           const target = inboxFile(context.sessionID);
           await mkdir(inboxDir(), { recursive: true });
           const tmp = `${target}.${randomUUID()}.tmp`;
           await writeFile(tmp, JSON.stringify(payload), "utf8");
           await rename(tmp, target);
-          const blocked = built.snapshot.blocked.length ? ` Removido por seguran\xE7a: ${built.snapshot.blocked.join(", ")}.` : "";
+          const blocked = built.snapshot.blocked.length ? ` Avisos (removido por seguran\xE7a ou ajustado): ${built.snapshot.blocked.join(", ")}.` : "";
           return { content: `Canvas publicado e vis\xEDvel no painel.${blocked}` };
         }
       });

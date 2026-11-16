@@ -170,4 +170,35 @@ describe("store", () => {
     await writeFile(file, JSON.stringify({ sessionId: "ses_a", canvas: { title: "x", updatedAt: 1, tree: [{ t: "el", tag: "script", attrs: {}, c: [] }] }, error: null }));
     assert.equal(await store.read("ses_a"), null);
   });
+
+  it("persiste as partes incorporadas junto com o canvas e as relê", async () => {
+    const store = createStore(dir);
+    const record = await store.publish("ses_a", "E", '<div data-embed="g">alt</div>', 1, undefined, [{ id: "g", html: "<svg></svg><script>1</script>" }]);
+    assert.deepEqual(record?.canvas?.embeds, { g: "<svg></svg><script>1</script>" });
+    assert.deepEqual((await createStore(dir).read("ses_a"))?.canvas?.embeds, { g: "<svg></svg><script>1</script>" });
+  });
+
+  it("registro gravado por versão anterior (sem embeds) ainda é lido", async () => {
+    await mkdir(path.join(dir, "canvases"), { recursive: true });
+    const legacy = { sessionId: "ses_a", canvas: { title: "velho", updatedAt: 5, tree: [{ t: "el", tag: "p", attrs: {}, c: [{ t: "text", v: "x" }] }], blocked: [] }, error: null };
+    await writeFile(path.join(dir, "canvases", "ses_a.json"), JSON.stringify(legacy));
+    const record = await createStore(dir).read("ses_a");
+    assert.equal(record?.canvas?.title, "velho");
+    assert.deepEqual(record?.canvas?.embeds, {});
+  });
+
+  it("embeds corrompidos no disco: o registro é ignorado, não desenhado", async () => {
+    await mkdir(path.join(dir, "canvases"), { recursive: true });
+    const bad = { sessionId: "ses_a", canvas: { title: "x", updatedAt: 5, tree: [], blocked: [], embeds: { "ID INVALIDO": "x" } }, error: null };
+    await writeFile(path.join(dir, "canvases", "ses_a.json"), JSON.stringify(bad));
+    assert.equal(await createStore(dir).read("ses_a"), null);
+  });
+
+  it("embeds inválidos recusam a publicação e mantêm o canvas vigente", async () => {
+    const store = createStore(dir);
+    await store.publish("ses_a", "bom", "<p>bom</p>", 1);
+    const record = await store.publish("ses_a", "ruim", '<div data-embed="a">x</div>', 2, undefined, [{ id: "a", html: "" }]);
+    assert.equal(record?.canvas?.title, "bom");
+    assert.equal(record?.error?.at, 2);
+  });
 });

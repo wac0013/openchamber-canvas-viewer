@@ -51,9 +51,11 @@ Fluxo: agente → `canvas_publish` (plugin) → arquivo na caixa de entrada → 
 - `src/shared/contract.ts` é a fonte da verdade do contrato painel↔serviço e do payload de canvas. Mudou o formato → subir `SERVICE_VERSION`, a versão no `package.json` e o changelog do `README.md` (semver).
 - Conteúdo de canvas é gerado por agente: **entrada não confiável** em todo ponto de entrada. Nunca remover validação/sanitização nos limites de confiança.
 - Painel: nunca `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`/`eval` (há teste que falha se aparecer).
+- Links: um só validador (`cleanHref` em `sanitize.ts`, http/https sem credenciais). No DOM o destino vai em `data-href`, nunca em `href`; só o painel abre (`host.openUrl`).
+- Partes incorporadas (`embeds`): o único HTML cru do projeto, sempre em iframe com `sandbox` exatamente `allow-scripts` (`EMBED_SANDBOX`; nunca `allow-same-origin`, `allow-popups`, `allow-forms` nem `allow-top-navigation`, há teste) e CSP de `embed-frame.ts`. Mensagens do iframe só passam por `readEmbedMessage`; link só com gesto do usuário.
 - O plugin do OpenCode não pode importar pacotes externos: o build embute tudo (só `node:*` fica de fora).
 - Ações que escrevem no chat (`host.attach`) passam por `src/canvas/actions.ts`, que confere a sessão em foco imediatamente antes de cada chamada. Nunca chamar o host direto da casca do painel.
-- Skills: `name` igual à pasta, `description` sem `: ` nem ` #` (YAML sem aspas); as tags listadas na skill são exatamente as do sanitizador; as classes da skill e da descrição da ferramenta são exatamente as estilizadas no painel; o formato do chip na skill vem de `context.ts` (há testes). Exemplos da skill passam pelo sanitizador real.
+- Skills: `name` igual à pasta, `description` sem `: ` nem ` #` (YAML sem aspas); as tags listadas na skill são exatamente as do sanitizador; as classes da skill e da descrição da ferramenta são exatamente as estilizadas no painel (o prefixo `oc-` é só alias, tratado em `view.ts`); os trechos de `references/` passam pelo sanitizador real; o formato do chip na skill vem de `context.ts` (há testes). Exemplos da skill passam pelo sanitizador real.
 - Mensagens que iniciam um turno do agente (botão Atualizar) saem pelo **serviço** com `sessions.send(sessionId, …)` e a sessão explícita, após `sessions.status`; nunca `host.prompt({ send: true })` do painel (o host envia para a sessão "atual" dele, que pode mudar no instante do clique). O texto é fixo (`UPDATE_REQUEST_TEXT`) e nunca leva conteúdo de canvas.
 - Segredos nunca no repositório.
 

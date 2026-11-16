@@ -4,12 +4,12 @@
 // este módulo lê um subconjunto estrito de HTML e produz uma ÁRVORE de dados. O painel só
 // constrói DOM a partir dessa árvore (createElement/textContent), nunca com innerHTML.
 //
-// - Construção PROIBIDA (script, style, link, img, atributo href/src/style/on*…): removida e
-//   anotada em `blocked`; o restante do canvas continua funcional (CA8).
+// - Construção PROIBIDA (script, style, link, img, src/style/on*, href que não seja http/https…):
+//   removida e anotada em `blocked`; o restante do canvas continua funcional (CA8).
 // - HTML MALFORMADO ou acima dos limites: recusado por inteiro (RN4: o canvas vigente fica).
 // Nenhuma mensagem reproduz o conteúdo do agente.
 
-import { BLOCKED_NOTES_MAX, LIMITS, type CanvasElement, type CanvasNode } from "../shared/contract.ts";
+import { BLOCKED_NOTES_MAX, LIMITS, TONES, type CanvasElement, type CanvasNode } from "../shared/contract.ts";
 
 export type ParseResult =
   | { ok: true; tree: CanvasNode[]; blocked: string[] }
@@ -17,7 +17,7 @@ export type ParseResult =
 
 /** Tags aceitas no canvas; a skill e a descrição da ferramenta devem listar exatamente estas. */
 export const ALLOWED_TAGS: ReadonlySet<string> = new Set([
-  "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd",
+  "a", "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd",
   "table", "caption", "thead", "tbody", "tfoot", "tr", "th", "td", "blockquote", "pre", "code",
   "strong", "b", "em", "i", "u", "s", "mark", "small", "sub", "sup", "kbd", "br", "hr",
   "section", "article", "header", "footer", "figure", "figcaption", "details", "summary",
@@ -41,7 +41,64 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
 const BIDI_CHARS_ALL = /[\u202a-\u202e\u2066-\u2069]/g;
 
+const TONE_SET: ReadonlySet<string> = new Set(TONES);
+const DATA_VALUE = /^(?:100(?:\.0{1,2})?|[0-9]{1,2}(?:\.[0-9]{1,2})?)$/;
+const DATA_HEIGHT = /^[0-9]{2,4}$/;
+const HREF_FORBIDDEN = /[\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
 class Malformed extends Error {}
+
+/**
+ * Link aceito: só `http:`/`https:`, sem credenciais, sem espaço/controle/bidi e até `hrefChars`.
+ * Devolve a forma normalizada (host em punycode, escapes) ou `null`. Idempotente: serve às duas
+ * fronteiras (leitura do HTML e revalidação da árvore).
+ */
+export function cleanHref(raw: string): string | null {
+  const value = raw.trim();
+  if (value === "" || value.length > LIMITS.hrefChars || HREF_FORBIDDEN.test(value)) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username !== "" || url.password !== "" || url.hostname === "") return null;
+  return url.href.length <= LIMITS.hrefChars ? url.href : null;
+}
+
+/** Atributos sem unicidade: valor limpo ou `null` se inválido. Compartilhado pelo leitor e pela revalidação. */
+const SIMPLE_ATTRIBUTES: ReadonlySet<string> = new Set(["title", "colspan", "rowspan", "href", "data-tone", "data-value", "data-group", "data-height"]);
+
+function simpleAttribute(tag: string, name: string, value: string): string | null {
+  switch (name) {
+    case "title":
+      return value.slice(0, 200);
+    case "colspan":
+    case "rowspan":
+      return /^[1-9][0-9]?$/.test(value) ? value : null;
+    case "href":
+      return tag === "a" ? cleanHref(value) : null;
+    case "data-tone":
+      return TONE_SET.has(value) ? value : null;
+    case "data-value":
+      return DATA_VALUE.test(value) ? value : null;
+    case "data-group": {
+      if (BIDI_CHARS.test(value)) return null;
+      const group = value.slice(0, LIMITS.groupChars).trim();
+      return group === "" ? null : group;
+    }
+    case "data-height":
+      return DATA_HEIGHT.test(value) && Number(value) >= LIMITS.embedHeightMin && Number(value) <= LIMITS.embedHeightMax ? value : null;
+    default:
+      return null;
+  }
+}
+
+function blockedNote(tag: string, name: string): string {
+  if (name === "href") return tag === "a" ? "link inválido (use http:// ou https://)" : "atributo href";
+  return `atributo ${name} inválido`;
+}
 
 function decodeEntities(raw: string): string {
   return raw.replace(/&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g, (whole, body: string) => {
@@ -68,6 +125,7 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
   const root: CanvasNode[] = [];
   const stack: CanvasElement[] = [];
   const seenItems = new Set<string>();
+  const seenEmbeds = new Set<string>();
   let nodes = 0;
   let index = 0;
 
@@ -104,14 +162,6 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
           if (valid.length) attrs.class = valid.join(" ");
           break;
         }
-        case "title":
-          attrs.title = value.slice(0, 200);
-          break;
-        case "colspan":
-        case "rowspan":
-          if (/^[1-9][0-9]?$/.test(value)) attrs[name] = value;
-          else block(`atributo ${name} inválido`);
-          break;
         case "data-canvas-item":
           if (!ITEM_ID.test(value)) throw new Malformed("data-canvas-item inválido (use [a-z0-9][a-z0-9-], até 40)");
           if (seenItems.has(value)) throw new Malformed(`data-canvas-item repetido: ${value}`);
@@ -119,8 +169,25 @@ function parseOrThrow(html: string, blocked: Set<string>): CanvasNode[] {
           seenItems.add(value);
           attrs["data-canvas-item"] = value;
           break;
+        case "data-embed":
+          if (tag !== "div") {
+            block("data-embed fora de <div>");
+            break;
+          }
+          if (!ITEM_ID.test(value)) throw new Malformed("data-embed inválido (use [a-z0-9][a-z0-9-], até 40)");
+          if (seenEmbeds.has(value)) throw new Malformed(`data-embed repetido: ${value}`);
+          if (seenEmbeds.size >= LIMITS.embeds) throw new Malformed(`mais de ${LIMITS.embeds} partes incorporadas`);
+          seenEmbeds.add(value);
+          attrs["data-embed"] = value;
+          break;
         default:
-          block(`atributo ${name.startsWith("on") ? "on*" : name}`);
+          if (SIMPLE_ATTRIBUTES.has(name)) {
+            const clean = simpleAttribute(tag, name, value);
+            if (clean === null) block(blockedNote(tag, name));
+            else attrs[name] = clean;
+          } else {
+            block(`atributo ${name.startsWith("on") ? "on*" : name}`);
+          }
       }
     }
     return attrs;
@@ -215,6 +282,7 @@ export function validateTree(value: unknown): CanvasNode[] | null {
   let nodes = 0;
   let items = 0;
   const seen = new Set<string>();
+  const embeds = new Set<string>();
 
   /** `depth` conta só elementos aninhados, igual ao parser: texto folha não é um nível. */
   const walk = (raw: unknown, depth: number): CanvasNode | null => {
@@ -233,15 +301,16 @@ export function validateTree(value: unknown): CanvasNode[] | null {
         const tokens = attr.split(/\s+/).filter(Boolean);
         if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
         attrs.class = tokens.join(" ");
-      } else if (name === "title") {
-        if (attr.length > 200) return null;
-        attrs.title = attr;
-      } else if (name === "colspan" || name === "rowspan") {
-        if (!/^[1-9][0-9]?$/.test(attr)) return null;
-        attrs[name] = attr;
       } else if (name === "data-canvas-item") {
         if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
         seen.add(attr);
+        attrs[name] = attr;
+      } else if (name === "data-embed") {
+        if (node.tag !== "div" || !ITEM_ID.test(attr) || embeds.has(attr) || embeds.size >= LIMITS.embeds) return null;
+        embeds.add(attr);
+        attrs[name] = attr;
+      } else if (SIMPLE_ATTRIBUTES.has(name)) {
+        if (simpleAttribute(node.tag, name, attr) !== attr) return null;
         attrs[name] = attr;
       } else {
         return null;
@@ -265,6 +334,21 @@ export function validateTree(value: unknown): CanvasNode[] | null {
     tree.push(clean);
   }
   return tree;
+}
+
+/** Ids das partes incorporadas referenciadas na árvore (`data-embed`), na ordem do documento. */
+export function embedIds(nodes: readonly CanvasNode[]): string[] {
+  const ids: string[] = [];
+  const walk = (list: readonly CanvasNode[]): void => {
+    for (const node of list) {
+      if (node.t !== "el") continue;
+      const id = node.attrs["data-embed"];
+      if (id) ids.push(id);
+      walk(node.c);
+    }
+  };
+  walk(nodes);
+  return ids;
 }
 
 /** Texto visível de um conjunto de nós (usado por itens marcáveis); limitado a `max` caracteres. */

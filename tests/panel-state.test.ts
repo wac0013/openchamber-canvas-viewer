@@ -8,7 +8,7 @@ const tree = [{ t: "el" as const, tag: "p", attrs: {}, c: [{ t: "text" as const,
 const response = (extra: Partial<Extract<CanvasResponse, { ok: true }>> = {}): CanvasResponse => ({
   ok: true,
   version: SERVICE_VERSION,
-  canvas: { title: "T", updatedAt: 5, tree, blocked: [] },
+  canvas: { title: "T", updatedAt: 5, tree, blocked: [], embeds: {} },
   error: null,
   ...extra,
 });
@@ -58,7 +58,7 @@ describe("viewFromResponse", () => {
 describe("viewFromResponse — campos do serviço são validados", () => {
   it("updatedAt inválido não vira 'Invalid Date': a resposta é recusada", () => {
     for (const updatedAt of ["x", NaN, -1, 9e15, null]) {
-      const raw = { ...response(), canvas: { title: "T", updatedAt, tree, blocked: [] } } as unknown as CanvasResponse;
+      const raw = { ...response(), canvas: { title: "T", updatedAt, tree, blocked: [], embeds: {} } } as unknown as CanvasResponse;
       assert.equal(viewFromResponse(raw).kind, "failed");
     }
   });
@@ -66,7 +66,7 @@ describe("viewFromResponse — campos do serviço são validados", () => {
   it("erro com tipos errados é ignorado; mensagem e avisos longos são cortados", () => {
     const bad = viewFromResponse(response({ error: { at: "x", message: 1 } as never }));
     assert.equal(bad.kind === "canvas" ? bad.error : "x", null);
-    const long = viewFromResponse(response({ error: { at: 5, message: "m".repeat(1000) }, canvas: { title: "t".repeat(500), updatedAt: 5, tree, blocked: ["b".repeat(500)] } }));
+    const long = viewFromResponse(response({ error: { at: 5, message: "m".repeat(1000) }, canvas: { title: "t".repeat(500), updatedAt: 5, tree, blocked: ["b".repeat(500)], embeds: {} } }));
     assert.ok(long.kind === "canvas");
     if (long.kind === "canvas") {
       assert.equal(long.error?.message.length, 300);
@@ -82,5 +82,19 @@ describe("parseCanvasResponse", () => {
     assert.equal(parseCanvasResponse("não json"), null);
     assert.equal(parseCanvasResponse("null"), null);
     assert.equal(parseCanvasResponse('{"x":1}'), null);
+  });
+
+  it("traz as partes incorporadas e revalida: mapa corrompido vira falha visível", () => {
+    const good = viewFromResponse(response({ canvas: { title: "T", updatedAt: 5, tree, blocked: [], embeds: { g: "<svg></svg>" } } }));
+    assert.equal(good.kind === "canvas" ? good.embeds.g : "", "<svg></svg>");
+    const bad = viewFromResponse(response({ canvas: { title: "T", updatedAt: 5, tree, blocked: [], embeds: { "X Y": "x" } } }));
+    assert.equal(bad.kind, "failed");
+  });
+
+  it("serviço antigo sem embeds: segue funcionando (mapa vazio) e avisa a versão", () => {
+    const legacy = { ...response(), version: 1, canvas: { title: "T", updatedAt: 5, tree, blocked: [] } } as unknown as CanvasResponse;
+    const view = viewFromResponse(legacy);
+    assert.equal(view.kind === "canvas" && view.outdatedService, true);
+    assert.deepEqual(view.kind === "canvas" ? view.embeds : null, {});
   });
 });

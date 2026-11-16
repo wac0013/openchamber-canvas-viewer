@@ -85,4 +85,38 @@ describe("plugin canvas_publish", () => {
       assert.match((await tool.execute(input, { sessionID: "ses_abc" })).content, /NÃO publicado/);
     }
   });
+
+  it("aceita partes incorporadas: schema estrito e arquivo com embeds", async () => {
+    const tool = await loadTool();
+    const props = (tool as unknown as { input: { properties: { embeds: { items: { required: string[]; additionalProperties: boolean } } } } }).input.properties;
+    assert.deepEqual(props.embeds.items.required, ["id", "html"]);
+    assert.equal(props.embeds.items.additionalProperties, false);
+    const result = await tool.execute({ html: '<div data-embed="g">alt</div>', embeds: [{ id: "g", html: "<svg></svg>" }] }, { sessionID: "ses_abc" });
+    assert.match(result.content, /publicado/);
+    const payload = JSON.parse(await readFile(path.join(inbox, "ses_abc.json"), "utf8")) as Record<string, unknown>;
+    assert.deepEqual(payload.embeds, [{ id: "g", html: "<svg></svg>" }]);
+  });
+
+  it("sem embeds o arquivo não leva o campo", async () => {
+    const tool = await loadTool();
+    await tool.execute({ html: "<p>a</p>" }, { sessionID: "ses_abc" });
+    const payload = JSON.parse(await readFile(path.join(inbox, "ses_abc.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("embeds" in payload, false);
+  });
+
+  it("embeds inválidos: erro ao agente e nada depositado; sobra e referência sem conteúdo viram aviso", async () => {
+    const tool = await loadTool();
+    const bad = await tool.execute({ html: '<div data-embed="g"></div>', embeds: [{ id: "G", html: "x" }] }, { sessionID: "ses_abc" });
+    assert.match(bad.content, /NÃO publicado/);
+    assert.deepEqual(await readdir(inbox), []);
+    const warn = await tool.execute({ html: '<div data-embed="g">a</div>', embeds: [{ id: "outra", html: "x" }] }, { sessionID: "ses_abc" });
+    assert.match(warn.content, /publicado/);
+    assert.ok(warn.content.includes("embed sem uso: outra") && warn.content.includes("data-embed sem conteúdo: g"));
+  });
+
+  it("a descrição apresenta links, tons, fluxogramas, gráficos e embeds", async () => {
+    const tool = await loadTool();
+    const text = (tool as unknown as { description: string }).description;
+    for (const expected of ["<a href", "data-tone", "data-value", "data-group", "fluxogramas", "gráficos", "embeds", "data-embed"]) assert.ok(text.includes(expected), expected);
+  });
 });

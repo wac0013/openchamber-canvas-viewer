@@ -267,7 +267,7 @@ var SURFACE_CONTROLLERS = ["none", "agent", "user"];
 var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
 
 // src/shared/contract.ts
-var SERVICE_VERSION = 2;
+var SERVICE_VERSION = 3;
 var INBOX_SCHEMA_VERSION = 1;
 var LIMITS = {
   /** Tamanho máximo do HTML publicado pelo agente. */
@@ -277,8 +277,22 @@ var LIMITS = {
   nodes: 5e3,
   items: 200,
   /** Texto máximo de um item marcável (limite do `host.attach`). */
-  itemTextChars: 16e3
+  itemTextChars: 16e3,
+  /** Tamanho máximo de um link (`href`). */
+  hrefChars: 2048,
+  /** Tamanho máximo do valor de `data-group` (filtro por grupo). */
+  groupChars: 60,
+  /** Quantidade de itens marcáveis a partir da qual o painel oferece o filtro de texto. */
+  filterMinItems: 6,
+  /** Partes incorporadas (HTML completo em iframe isolado): quantidade, tamanho de cada uma e total. */
+  embeds: 8,
+  embedChars: 1e5,
+  embedsTotalChars: 2e5,
+  /** Altura de uma parte incorporada, em px. */
+  embedHeightMin: 60,
+  embedHeightMax: 1200
 };
+var TONES = ["neutral", "info", "success", "warning", "error"];
 var SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 var BLOCKED_NOTES_MAX = 20;
 var UPDATE_REQUEST_MARKER = "[Painel Canvas \xB7 Atualizar]";
@@ -291,7 +305,7 @@ import { link, lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promi
 import path from "node:path";
 var FILE_NAME = /^([A-Za-z0-9_-]{1,128})\.json$/;
 var CLAIMED_NAME = /^([A-Za-z0-9_-]{1,128})\.json\.[0-9a-f-]{36}\.proc$/;
-var MAX_FILE_BYTES = LIMITS.htmlChars * 6 + 4096;
+var MAX_FILE_BYTES = (LIMITS.htmlChars + LIMITS.embedsTotalChars) * 6 + 8192;
 var STALE_CLAIM_MS = 6e4;
 var MAX_ATTEMPTS = 5;
 var attempts = /* @__PURE__ */ new Map();
@@ -308,7 +322,7 @@ async function readPayload(file, sessionId) {
   if (typeof payload !== "object" || payload === null) return { ok: false, message: "a publica\xE7\xE3o n\xE3o \xE9 um objeto" };
   if (payload.v !== INBOX_SCHEMA_VERSION) return { ok: false, message: "vers\xE3o de publica\xE7\xE3o n\xE3o suportada" };
   if (payload.sessionId !== sessionId) return { ok: false, message: "a publica\xE7\xE3o n\xE3o pertence a esta sess\xE3o" };
-  return { ok: true, title: payload.title, html: payload.html };
+  return { ok: true, title: payload.title, html: payload.html, embeds: payload.embeds };
 }
 async function drainInbox(inbox2, store2, now, options = {}) {
   await mkdir(inbox2, { recursive: true });
@@ -332,7 +346,7 @@ async function drainInbox(inbox2, store2, now, options = {}) {
     }
     try {
       const payload = await readPayload(claimed, sessionId);
-      const record = payload.ok ? await store2.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation }) : await store2.reject(sessionId, payload.message, now(), { expectedGeneration: generation });
+      const record = payload.ok ? await store2.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation }, payload.embeds) : await store2.reject(sessionId, payload.message, now(), { expectedGeneration: generation });
       if (record) changed.push(sessionId);
       attempts.delete(sessionId);
       await rm(claimed, { force: true, recursive: true });
@@ -382,8 +396,43 @@ import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdir as mkdir2, readFile as readFile2, rename as rename2, rm as rm2, writeFile } from "node:fs/promises";
 import path3 from "node:path";
 
+// src/canvas/embeds.ts
+var EMBED_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+function isEmbedId(value) {
+  return typeof value === "string" && EMBED_ID.test(value);
+}
+function parseEmbedsInput(value) {
+  if (value === void 0 || value === null) return { ok: true, embeds: {} };
+  if (!Array.isArray(value)) return { ok: false, message: "embeds deve ser uma lista de { id, html }" };
+  if (value.length > LIMITS.embeds) return { ok: false, message: `mais de ${LIMITS.embeds} partes incorporadas` };
+  const embeds = {};
+  let total = 0;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return { ok: false, message: "cada embed deve ser { id, html }" };
+    const { id, html } = entry;
+    if (!isEmbedId(id)) return { ok: false, message: "id de embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)" };
+    if (Object.hasOwn(embeds, id)) return { ok: false, message: `embed repetido: ${id}` };
+    if (typeof html !== "string" || html.trim() === "") return { ok: false, message: `o embed ${id} est\xE1 vazio` };
+    if (html.length > LIMITS.embedChars) return { ok: false, message: `o embed ${id} passa de ${LIMITS.embedChars} caracteres` };
+    if (CONTROL_CHARS.test(html)) return { ok: false, message: `caractere de controle no embed ${id}` };
+    total += html.length;
+    if (total > LIMITS.embedsTotalChars) return { ok: false, message: `os embeds passam de ${LIMITS.embedsTotalChars} caracteres no total` };
+    embeds[id] = html;
+  }
+  return { ok: true, embeds };
+}
+function validateEmbeds(value) {
+  if (value === void 0) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const entries = Object.entries(value).map(([id, html]) => ({ id, html }));
+  const parsed = parseEmbedsInput(entries);
+  return parsed.ok ? parsed.embeds : null;
+}
+
 // src/canvas/sanitize.ts
 var ALLOWED_TAGS = /* @__PURE__ */ new Set([
+  "a",
   "div",
   "span",
   "p",
@@ -451,11 +500,57 @@ var DROP_VOID = /* @__PURE__ */ new Set(["img", "input", "meta", "link", "base",
 var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
 var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\xA0" };
-var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+var CONTROL_CHARS2 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
 var BIDI_CHARS_ALL = /[\u202a-\u202e\u2066-\u2069]/g;
+var TONE_SET = new Set(TONES);
+var DATA_VALUE = /^(?:100(?:\.0{1,2})?|[0-9]{1,2}(?:\.[0-9]{1,2})?)$/;
+var DATA_HEIGHT = /^[0-9]{2,4}$/;
+var HREF_FORBIDDEN = /[\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 var Malformed = class extends Error {
 };
+function cleanHref(raw) {
+  const value = raw.trim();
+  if (value === "" || value.length > LIMITS.hrefChars || HREF_FORBIDDEN.test(value)) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username !== "" || url.password !== "" || url.hostname === "") return null;
+  return url.href.length <= LIMITS.hrefChars ? url.href : null;
+}
+var SIMPLE_ATTRIBUTES = /* @__PURE__ */ new Set(["title", "colspan", "rowspan", "href", "data-tone", "data-value", "data-group", "data-height"]);
+function simpleAttribute(tag, name, value) {
+  switch (name) {
+    case "title":
+      return value.slice(0, 200);
+    case "colspan":
+    case "rowspan":
+      return /^[1-9][0-9]?$/.test(value) ? value : null;
+    case "href":
+      return tag === "a" ? cleanHref(value) : null;
+    case "data-tone":
+      return TONE_SET.has(value) ? value : null;
+    case "data-value":
+      return DATA_VALUE.test(value) ? value : null;
+    case "data-group": {
+      if (BIDI_CHARS.test(value)) return null;
+      const group = value.slice(0, LIMITS.groupChars).trim();
+      return group === "" ? null : group;
+    }
+    case "data-height":
+      return DATA_HEIGHT.test(value) && Number(value) >= LIMITS.embedHeightMin && Number(value) <= LIMITS.embedHeightMax ? value : null;
+    default:
+      return null;
+  }
+}
+function blockedNote(tag, name) {
+  if (name === "href") return tag === "a" ? "link inv\xE1lido (use http:// ou https://)" : "atributo href";
+  return `atributo ${name} inv\xE1lido`;
+}
 function decodeEntities(raw) {
   return raw.replace(/&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g, (whole, body) => {
     if (body.startsWith("#")) {
@@ -478,6 +573,7 @@ function parseOrThrow(html, blocked) {
   const root = [];
   const stack = [];
   const seenItems = /* @__PURE__ */ new Set();
+  const seenEmbeds = /* @__PURE__ */ new Set();
   let nodes = 0;
   let index = 0;
   const block = (what) => {
@@ -490,7 +586,7 @@ function parseOrThrow(html, blocked) {
   const pushText = (raw) => {
     if (!raw) return;
     let value = decodeEntities(raw);
-    if (CONTROL_CHARS.test(value)) throw new Malformed("caractere de controle no texto");
+    if (CONTROL_CHARS2.test(value)) throw new Malformed("caractere de controle no texto");
     if (BIDI_CHARS.test(value)) {
       block("controle bidirecional");
       value = value.replace(BIDI_CHARS_ALL, "");
@@ -503,7 +599,7 @@ function parseOrThrow(html, blocked) {
     for (const match of raw.matchAll(ATTRIBUTE)) {
       const name = (match[1] ?? "").toLowerCase();
       const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? "");
-      if (CONTROL_CHARS.test(value)) throw new Malformed(`caractere inv\xE1lido no atributo "${name}"`);
+      if (CONTROL_CHARS2.test(value)) throw new Malformed(`caractere inv\xE1lido no atributo "${name}"`);
       switch (name) {
         case "class": {
           const tokens = value.split(/\s+/).filter(Boolean);
@@ -512,14 +608,6 @@ function parseOrThrow(html, blocked) {
           if (valid.length) attrs.class = valid.join(" ");
           break;
         }
-        case "title":
-          attrs.title = value.slice(0, 200);
-          break;
-        case "colspan":
-        case "rowspan":
-          if (/^[1-9][0-9]?$/.test(value)) attrs[name] = value;
-          else block(`atributo ${name} inv\xE1lido`);
-          break;
         case "data-canvas-item":
           if (!ITEM_ID.test(value)) throw new Malformed("data-canvas-item inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)");
           if (seenItems.has(value)) throw new Malformed(`data-canvas-item repetido: ${value}`);
@@ -527,8 +615,25 @@ function parseOrThrow(html, blocked) {
           seenItems.add(value);
           attrs["data-canvas-item"] = value;
           break;
+        case "data-embed":
+          if (tag !== "div") {
+            block("data-embed fora de <div>");
+            break;
+          }
+          if (!ITEM_ID.test(value)) throw new Malformed("data-embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)");
+          if (seenEmbeds.has(value)) throw new Malformed(`data-embed repetido: ${value}`);
+          if (seenEmbeds.size >= LIMITS.embeds) throw new Malformed(`mais de ${LIMITS.embeds} partes incorporadas`);
+          seenEmbeds.add(value);
+          attrs["data-embed"] = value;
+          break;
         default:
-          block(`atributo ${name.startsWith("on") ? "on*" : name}`);
+          if (SIMPLE_ATTRIBUTES.has(name)) {
+            const clean = simpleAttribute(tag, name, value);
+            if (clean === null) block(blockedNote(tag, name));
+            else attrs[name] = clean;
+          } else {
+            block(`atributo ${name.startsWith("on") ? "on*" : name}`);
+          }
       }
     }
     return attrs;
@@ -609,11 +714,12 @@ function validateTree(value) {
   let nodes = 0;
   let items = 0;
   const seen = /* @__PURE__ */ new Set();
+  const embeds = /* @__PURE__ */ new Set();
   const walk = (raw, depth) => {
     if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
     const node = raw;
     if (node.t === "text") {
-      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
+      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS2.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
     }
     if (depth > LIMITS.depth) return null;
     if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
@@ -625,15 +731,16 @@ function validateTree(value) {
         const tokens = attr.split(/\s+/).filter(Boolean);
         if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
         attrs.class = tokens.join(" ");
-      } else if (name === "title") {
-        if (attr.length > 200) return null;
-        attrs.title = attr;
-      } else if (name === "colspan" || name === "rowspan") {
-        if (!/^[1-9][0-9]?$/.test(attr)) return null;
-        attrs[name] = attr;
       } else if (name === "data-canvas-item") {
         if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
         seen.add(attr);
+        attrs[name] = attr;
+      } else if (name === "data-embed") {
+        if (node.tag !== "div" || !ITEM_ID.test(attr) || embeds.has(attr) || embeds.size >= LIMITS.embeds) return null;
+        embeds.add(attr);
+        attrs[name] = attr;
+      } else if (SIMPLE_ATTRIBUTES.has(name)) {
+        if (simpleAttribute(node.tag, name, attr) !== attr) return null;
         attrs[name] = attr;
       } else {
         return null;
@@ -657,17 +764,40 @@ function validateTree(value) {
   }
   return tree;
 }
+function embedIds(nodes) {
+  const ids = [];
+  const walk = (list) => {
+    for (const node of list) {
+      if (node.t !== "el") continue;
+      const id = node.attrs["data-embed"];
+      if (id) ids.push(id);
+      walk(node.c);
+    }
+  };
+  walk(nodes);
+  return ids;
+}
 
 // src/canvas/snapshot.ts
 var TITLE_STRIP = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
-function buildSnapshot(title, html, now) {
+function buildSnapshot(title, html, now, embedsInput) {
   const cleanTitle = typeof title === "string" ? title.replace(TITLE_STRIP, " ").trim().slice(0, LIMITS.titleChars) : "";
   const parsed = parseCanvasHtml(html);
   if (!parsed.ok) return { ok: false, message: parsed.message };
+  const sent = parseEmbedsInput(embedsInput);
+  if (!sent.ok) return { ok: false, message: sent.message };
   if (parsed.tree.length === 0) return { ok: false, message: "o canvas est\xE1 vazio" };
   const tree = validateTree(parsed.tree);
   if (!tree) return { ok: false, message: "o canvas excede os limites de estrutura" };
-  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: parsed.blocked } };
+  const used = new Set(embedIds(tree));
+  const embeds = {};
+  const blocked = [...parsed.blocked];
+  for (const [id, body] of Object.entries(sent.embeds)) {
+    if (used.has(id)) embeds[id] = body;
+    else blocked.push(`embed sem uso: ${id}`);
+  }
+  for (const id of used) if (!Object.hasOwn(embeds, id)) blocked.push(`data-embed sem conte\xFAdo: ${id}`);
+  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: blocked.slice(0, BLOCKED_NOTES_MAX), embeds } };
 }
 
 // service/store.ts
@@ -705,7 +835,9 @@ function createStore(dataDir) {
         const tree = validateTree(canvas.tree);
         if (!tree || typeof canvas.updatedAt !== "number" || typeof canvas.title !== "string") return null;
         const blocked = Array.isArray(canvas.blocked) ? canvas.blocked.filter((note) => typeof note === "string").slice(0, BLOCKED_NOTES_MAX) : [];
-        return { sessionId, canvas: { title: canvas.title, updatedAt: canvas.updatedAt, tree, blocked }, error: readError(value.error) };
+        const embeds = validateEmbeds(canvas.embeds);
+        if (!embeds) return null;
+        return { sessionId, canvas: { title: canvas.title, updatedAt: canvas.updatedAt, tree, blocked, embeds }, error: readError(value.error) };
       }
       return { sessionId, canvas: null, error: readError(value.error) };
     } catch {
@@ -738,11 +870,11 @@ function createStore(dataDir) {
         await rm2(fileOf(sessionId), { force: true });
       });
     },
-    publish: async (sessionId, title, html, now, options) => {
+    publish: async (sessionId, title, html, now, options, embeds) => {
       fileOf(sessionId);
       return locked(sessionId, async () => {
         if (outdated(sessionId, options)) return null;
-        const built = buildSnapshot(title, html, now);
+        const built = buildSnapshot(title, html, now, embeds);
         if (!built.ok) return rejectLocked(sessionId, built.message, now);
         const record = { sessionId, canvas: built.snapshot, error: null };
         await write(record);

@@ -27,7 +27,7 @@ Requer OpenChamber ≥ 2.7.0 (a permissão `sessionControl` do botão Atualizar 
 
 ## Skills para os agentes
 
-A ferramenta `canvas_publish` já traz o formato na própria descrição, mas a skill **`openchamber-canvas`** ensina o uso completo: quando usar o canvas, atualizar sempre o mesmo, marcar elementos comentáveis, responder a comentários, apresentar bem nos temas claro e escuro, respeitar os limites e não repetir a visualização no chat. Inclui três exemplos prontos (acompanhamento de ações, comparação em tabela e fluxo de etapas). Pensada para agentes Claude; cita as skills de front da Anthropic (`frontend-design`, `canvas`) pelo nome, sem copiá-las.
+A ferramenta `canvas_publish` já traz o formato na própria descrição, mas a skill **`openchamber-canvas`** ensina o uso completo: quando usar o canvas, atualizar sempre o mesmo, marcar elementos comentáveis, responder a comentários, apresentar bem nos temas claro e escuro, respeitar os limites e não repetir a visualização no chat. Manda o agente **sempre considerar fluxogramas e gráficos**, usar links, selos, métricas, filtro e partes incorporadas, e traz cinco exemplos prontos (acompanhamento de ações, comparação em tabela, fluxograma, painel com filtro e gráfico em SVG) mais uma referência de componentes. Pensada para agentes Claude; cita as skills de front da Anthropic (`frontend-design`, `canvas`) pelo nome, sem copiá-las.
 
 As skills ficam só neste repositório e são instaladas pelo CLI [`skills`](https://github.com/vercel-labs/skills):
 
@@ -43,15 +43,21 @@ Instalação manual: copie a pasta `skills/openchamber-canvas` (com `references/
 
 ## O que o agente pode publicar
 
-`canvas_publish({ html, title? })` — cada chamada **substitui** o canvas da conversa (envie o HTML completo).
+`canvas_publish({ html, title?, embeds? })` — cada chamada **substitui** o canvas da conversa (envie o HTML completo).
 
 | Permitido | |
 | --- | --- |
-| Tags | `div span p h1–h6 ul ol li dl dt dd table caption thead tbody tfoot tr th td blockquote pre code strong b em i u s mark small sub sup kbd br hr section article header footer figure figcaption details summary` |
-| Atributos | `class` (nomes `[a-z][a-z0-9-]`), `title`, `colspan`, `rowspan`, `data-canvas-item="<id>"` |
-| Classes prontas | `card row grid grid-2 grid-3 muted ok warn err info badge mono small big center right` |
+| Tags | `a div span p h1–h6 ul ol li dl dt dd table caption thead tbody tfoot tr th td blockquote pre code strong b em i u s mark small sub sup kbd br hr section article header footer figure figcaption details summary` |
+| Atributos | `class` (nomes `[a-z][a-z0-9-]`), `title`, `colspan`, `rowspan`, `href` (só em `a`), `data-canvas-item="<id>"`, `data-tone`, `data-value`, `data-group`, `data-embed` e `data-height` (só em `div`) |
+| Classes prontas | `card box row grid grid-2 grid-3 split side rows table muted ok warn err info mono small big center right num badge chip dot stat stat-value stat-label callout callout-title bar chart chart-row chart-label chart-value stack seg columns col col-track col-bar col-label flow flow-col step step-title` (o prefixo `oc-` do render nativo do OpenChamber vale igual: `oc-box` = `box`) |
+| Tons | `data-tone="neutral\|info\|success\|warning\|error"` colore selo, chip, métrica, aviso, etapa e barras pelo tema (claro e escuro) |
 
-Tudo o que é executável, remoto ou de navegação é **removido** (o resto do canvas continua) e o painel e o agente são avisados do que saiu: `script`, `style`, `iframe`, `svg`, `img`, `a`/`href`, formulários, `on*`, `src`, `style=…`. HTML malformado (tag sem fechar, aninhamento > 32, > 5 000 nós, > 200 000 caracteres…) é **recusado por inteiro**: o canvas anterior permanece e o painel mostra o motivo.
+- **Links** (`<a href>`): só `http://` e `https://`, sem usuário/senha, até 2 048 caracteres. O clique abre fora do painel (`host.openUrl`); a URL aparece no tooltip. Qualquer outro esquema (`javascript:`, `data:`, `file:`…) é removido e o texto fica. Ao comentar um trecho com links, o chip leva os destinos (`Links no trecho:`).
+- **Filtro**: com 6+ itens marcados (`data-canvas-item`) ou 2+ valores de `data-group`, o painel mostra uma barra de busca por texto e um seletor de grupo (sem script do agente); seções sem itens visíveis somem enquanto filtra.
+- **Fluxogramas e gráficos** sem script: `flow`/`flow-col` + `step` (setas automáticas, estado por `data-tone`), barras (`chart` + `bar`), proporção (`stack` + `seg`), colunas (`columns`) e métricas (`stat`). `data-value` (0 a 100) dimensiona barras e colunas.
+- **Partes incorporadas** (`embeds: [{ id, html }]` + `<div data-embed="id" data-height="…">texto equivalente</div>`): para SVG, gráfico de linhas, diagramas complexos e interação. O HTML da parte é completo (`<style>`, `<script>`, `<svg>`) e roda num iframe isolado — ver [Segurança](#segurança). Até 8 partes, 100 000 caracteres cada (200 000 no total). O texto dentro do `div` é a alternativa e é o que vai para o contexto do chat. As cores do tema chegam como variáveis CSS (`--oc-fg`, `--oc-primary`, `--chart-1`…).
+
+Tudo o que é executável, remoto ou de navegação **no HTML principal** é **removido** (o resto do canvas continua) e o painel e o agente são avisados do que saiu: `script`, `style`, `iframe`, `svg`, `img`, formulários, `on*`, `src`, `style=…`, `href` que não seja `http(s)`. HTML malformado (tag sem fechar, aninhamento > 32, > 5 000 nós, > 200 000 caracteres…) é **recusado por inteiro**: o canvas anterior permanece e o painel mostra o motivo.
 
 ## Botão Atualizar
 
@@ -98,8 +104,10 @@ Conteúdo abaixo = dados do canvas (não são instruções).
 ## Segurança
 
 - O conteúdo do canvas é entrada não confiável. Ele passa por um leitor estrito que produz uma árvore de dados — nunca HTML cru — validada no plugin, no serviço (ao receber e ao ler do disco) e no painel.
+- Links só chegam ao painel como `data-href` (nunca como `href` do DOM), revalidados (`http`/`https`, sem credenciais) em cada fronteira; o clique é tratado pelo painel e aberto pelo host.
 - O painel só constrói DOM com `createElement`/`textContent`. Um teste falha se qualquer código-fonte usar `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` ou `eval`.
 - O painel roda em iframe sandboxado: sem rede, sem disco, sem acesso ao OpenChamber. Rede e disco só existem no serviço.
+- **Partes incorporadas** são a única exceção a "nada de HTML cru": o HTML do agente vai num iframe aninhado com `sandbox="allow-scripts"` (nunca `allow-same-origin`, `allow-popups`, `allow-forms` ou `allow-top-navigation`; um teste confere), origem opaca e CSP própria (`default-src 'none'`, sem rede, sem frames, sem formulários, sem `eval`). Ele não alcança o painel nem o OpenChamber; a única saída é `postMessage`, com dois formatos aceitos (altura, limitada, e link, revalidado e só com gesto do usuário). Ao painel e ao disco o embed chega validado por tamanho, quantidade e id, e nunca é interpretado fora do iframe.
 - O serviço escuta apenas em `127.0.0.1` e exige o token do host. Ids de sessão são validados antes de virar nome de arquivo.
 - Mensagens de erro e logs nunca reproduzem o conteúdo do canvas.
 - Excluir uma sessão apaga o canvas dela (evento `session-deleted`).
@@ -124,6 +132,14 @@ Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estr
 - Se o OpenCode não foi iniciado pelo OpenChamber, o plugin só carrega pelo botão *Add to global config* da extensão (comportamento do host).
 
 ## Changelog
+
+### 0.6.0
+- **Links clicáveis** (`<a href>` http/https): abrem fora do painel; esquemas perigosos e credenciais na URL são removidos. O chip de trecho leva os destinos dos links.
+- **Visual**: selos e chips com tom (`data-tone`), métricas (`stat`), avisos (`callout`), linhas com informação à direita (`split`/`side`), tamanhos compactos e layout que se adapta à largura do painel. Compatível com as classes `oc-*` do render nativo do OpenChamber.
+- **Fluxogramas e gráficos sem script**: `flow`/`flow-col`/`step`, barras, proporção e colunas.
+- **Filtro** de texto e de grupo gerado pelo painel (`data-canvas-item` + `data-group`).
+- **Partes incorporadas** (`embeds` + `data-embed`): HTML completo com `<style>`, `<script>` e SVG em iframe isolado e sem rede, com tema repassado e altura automática.
+- Skill reescrita: manda considerar fluxogramas e gráficos, com referência de componentes e cinco exemplos validados. `SERVICE_VERSION` 3 (o painel avisa se o serviço estiver desatualizado).
 
 ### 0.5.0
 - Botão **Atualizar** no cabeçalho do painel: pedido formal ao agente para republicar o canvas, enviado em nome do usuário para a sessão dona do canvas (id explícito), sem interromper o agente. A skill reconhece o pedido pelo marcador.

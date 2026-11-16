@@ -1,6 +1,6 @@
 {
   "name": "openchamber-canvas-viewer",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "Apache-2.0",
   "type": "module",
   "description": "Canvas por sessão no OpenChamber, atualizado em tempo real pelo agente",
