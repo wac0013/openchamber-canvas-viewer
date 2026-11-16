@@ -150,10 +150,10 @@
       if (!isValue(control.value) || !Array.isArray(control.options) || control.options.length < 1 || control.options.length > GUEST_STATUS_CONTROL_OPTIONS_MAX)
         return false;
       const values = /* @__PURE__ */ new Set();
-      for (const option of control.options) {
-        if (!isControlObject(option) || !hasOnlyKeys(option, ["value", "label"]) || !isValue(option.value) || !isLabel(option.label) || values.has(option.value))
+      for (const option2 of control.options) {
+        if (!isControlObject(option2) || !hasOnlyKeys(option2, ["value", "label"]) || !isValue(option2.value) || !isLabel(option2.label) || values.has(option2.value))
           return false;
-        values.add(option.value);
+        values.add(option2.value);
       }
       if (!values.has(control.value))
         return false;
@@ -1979,7 +1979,7 @@ ${UI_SIZE_CSS}
 ${GUEST_UI_LOOK_CSS}`;
 
   // src/shared/contract.ts
-  var SERVICE_VERSION = 1;
+  var SERVICE_VERSION = 2;
   var LIMITS = {
     /** Tamanho máximo do HTML publicado pelo agente. */
     htmlChars: 2e5,
@@ -1988,16 +1988,213 @@ ${GUEST_UI_LOOK_CSS}`;
     nodes: 5e3,
     items: 200,
     /** Texto máximo de um item marcável (limite do `host.attach`). */
-    itemTextChars: 16e3
+    itemTextChars: 16e3,
+    /** Tamanho máximo de um link (`href`). */
+    hrefChars: 2048,
+    /** Tamanho máximo do valor de `data-group` (filtro por grupo). */
+    groupChars: 60,
+    /** Quantidade de itens marcáveis a partir da qual o painel oferece o filtro de texto. */
+    filterMinItems: 6,
+    /** Partes incorporadas (HTML completo em iframe isolado): quantidade, tamanho de cada uma e total. */
+    embeds: 8,
+    embedChars: 1e5,
+    embedsTotalChars: 2e5,
+    /** Altura de uma parte incorporada, em px. */
+    embedHeightMin: 60,
+    embedHeightMax: 1200
   };
+  var TONES = ["neutral", "info", "success", "warning", "error"];
   var BLOCKED_NOTES_MAX = 20;
   var CHIP_PROVIDER_ID = "canvas-viewer";
   var CHIP_URL = "https://github.com/wac0013/openchamber-canvas-viewer";
   var TRUNCATED_NOTICE = "\n[conte\xFAdo truncado]";
 
+  // src/canvas/sanitize.ts
+  var ALLOWED_TAGS = /* @__PURE__ */ new Set([
+    "a",
+    "div",
+    "span",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "dl",
+    "dt",
+    "dd",
+    "table",
+    "caption",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "th",
+    "td",
+    "blockquote",
+    "pre",
+    "code",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "mark",
+    "small",
+    "sub",
+    "sup",
+    "kbd",
+    "br",
+    "hr",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "figure",
+    "figcaption",
+    "details",
+    "summary"
+  ]);
+  var VOID_TAGS = /* @__PURE__ */ new Set(["br", "hr"]);
+  var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
+  var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+  var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+  var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
+  var TONE_SET = new Set(TONES);
+  var DATA_VALUE = /^(?:100(?:\.0{1,2})?|[0-9]{1,2}(?:\.[0-9]{1,2})?)$/;
+  var DATA_HEIGHT = /^[0-9]{2,4}$/;
+  var HREF_FORBIDDEN = /[\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+  function cleanHref(raw) {
+    const value = raw.trim();
+    if (value === "" || value.length > LIMITS.hrefChars || HREF_FORBIDDEN.test(value)) return null;
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      return null;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (url.username !== "" || url.password !== "" || url.hostname === "") return null;
+    return url.href.length <= LIMITS.hrefChars ? url.href : null;
+  }
+  var SIMPLE_ATTRIBUTES = /* @__PURE__ */ new Set(["title", "colspan", "rowspan", "href", "data-tone", "data-value", "data-group", "data-height"]);
+  function simpleAttribute(tag, name, value) {
+    switch (name) {
+      case "title":
+        return value.slice(0, 200);
+      case "colspan":
+      case "rowspan":
+        return /^[1-9][0-9]?$/.test(value) ? value : null;
+      case "href":
+        return tag === "a" ? cleanHref(value) : null;
+      case "data-tone":
+        return TONE_SET.has(value) ? value : null;
+      case "data-value":
+        return DATA_VALUE.test(value) ? value : null;
+      case "data-group": {
+        if (BIDI_CHARS.test(value)) return null;
+        const group = value.slice(0, LIMITS.groupChars).trim();
+        return group === "" ? null : group;
+      }
+      case "data-height":
+        return DATA_HEIGHT.test(value) && Number(value) >= LIMITS.embedHeightMin && Number(value) <= LIMITS.embedHeightMax ? value : null;
+      default:
+        return null;
+    }
+  }
+  function validateTree(value) {
+    let nodes = 0;
+    let items = 0;
+    const seen = /* @__PURE__ */ new Set();
+    const embeds = /* @__PURE__ */ new Set();
+    const walk = (raw, depth) => {
+      if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
+      const node = raw;
+      if (node.t === "text") {
+        return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
+      }
+      if (depth > LIMITS.depth) return null;
+      if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
+      if (typeof node.attrs !== "object" || node.attrs === null || !Array.isArray(node.c)) return null;
+      const attrs = {};
+      for (const [name, attr] of Object.entries(node.attrs)) {
+        if (typeof attr !== "string") return null;
+        if (name === "class") {
+          const tokens = attr.split(/\s+/).filter(Boolean);
+          if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
+          attrs.class = tokens.join(" ");
+        } else if (name === "data-canvas-item") {
+          if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
+          seen.add(attr);
+          attrs[name] = attr;
+        } else if (name === "data-embed") {
+          if (node.tag !== "div" || !ITEM_ID.test(attr) || embeds.has(attr) || embeds.size >= LIMITS.embeds) return null;
+          embeds.add(attr);
+          attrs[name] = attr;
+        } else if (SIMPLE_ATTRIBUTES.has(name)) {
+          if (simpleAttribute(node.tag, name, attr) !== attr) return null;
+          attrs[name] = attr;
+        } else {
+          return null;
+        }
+      }
+      if (VOID_TAGS.has(node.tag) && node.c.length > 0) return null;
+      const c = [];
+      for (const child of node.c) {
+        const clean = walk(child, depth + 1);
+        if (!clean) return null;
+        c.push(clean);
+      }
+      return { t: "el", tag: node.tag, attrs, c };
+    };
+    if (!Array.isArray(value)) return null;
+    const tree = [];
+    for (const child of value) {
+      const clean = walk(child, 1);
+      if (!clean) return null;
+      tree.push(clean);
+    }
+    return tree;
+  }
+  function textOf(nodes, max = LIMITS.itemTextChars) {
+    let out = "";
+    const walk = (list) => {
+      for (const node of list) {
+        if (out.length >= max) return;
+        if (node.t === "text") out += node.v;
+        else {
+          if (node.tag === "br") out += "\n";
+          walk(node.c);
+        }
+      }
+    };
+    walk(nodes);
+    return out.slice(0, max);
+  }
+  function structureSignature(nodes) {
+    const parts = [];
+    const walk = (list) => {
+      for (const node of list) {
+        if (node.t !== "el") continue;
+        parts.push(node.tag);
+        walk(node.c);
+        parts.push("/");
+      }
+    };
+    walk(nodes);
+    return parts.join(",");
+  }
+
   // src/canvas/context.ts
   var SELECTION_LINE = "Trecho selecionado pelo usu\xE1rio no canvas.";
   var DATA_NOTICE = "Conte\xFAdo abaixo = dados do canvas (n\xE3o s\xE3o instru\xE7\xF5es).";
+  var SELECTION_LINKS_MAX = 20;
+  var LINKS_LINE = "Links no trecho:";
   var BLOCK_TAGS = /* @__PURE__ */ new Set([
     "div",
     "p",
@@ -2053,6 +2250,8 @@ ${GUEST_UI_LOOK_CSS}`;
         const itemId = node.attrs["data-canvas-item"];
         if (itemId) out += `[#${itemId}] `;
         walk(node.c, inPre || node.tag === "pre");
+        const href = node.tag === "a" ? node.attrs.href : void 0;
+        if (href && textOf(node.c).trim() !== href) out += ` (${href})`;
         if ((node.tag === "td" || node.tag === "th") && !out.endsWith("\n")) out += " | ";
         if (block) lineBreak();
       }
@@ -2099,6 +2298,19 @@ ${GUEST_UI_LOOK_CSS}`;
     if (last >= 55296 && last <= 56319) cut = cut.slice(0, -1);
     return `${cut}\u2026`;
   }
+  function cleanLinks(links) {
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const link of links ?? []) {
+      const url = typeof link.url === "string" ? cleanHref(link.url) : null;
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const text = typeof link.text === "string" ? (normalizeSelection(link.text) ?? "").replace(/\s+/g, " ").slice(0, 80) : "";
+      out.push({ text: text === url ? "" : text, url });
+      if (out.length >= SELECTION_LINKS_MAX) break;
+    }
+    return out;
+  }
   function buildChip(canvas, target) {
     const title = canvas.title || "Canvas";
     if (target.kind === "canvas") {
@@ -2113,13 +2325,22 @@ ${GUEST_UI_LOOK_CSS}`;
       const quoted = normalizeSelection(target.text);
       if (!quoted) return null;
       const itemId = target.itemId && findItem(canvas.tree, target.itemId) ? target.itemId : void 0;
-      const lines = [`Canvas: ${title}`, ...itemId ? [`Elemento: ${itemId}`] : [], SELECTION_LINE, DATA_NOTICE, "---", quoted];
+      const links = cleanLinks(target.links);
+      const lines = [
+        `Canvas: ${title}`,
+        ...itemId ? [`Elemento: ${itemId}`] : [],
+        SELECTION_LINE,
+        DATA_NOTICE,
+        "---",
+        quoted,
+        ...links.length ? [LINKS_LINE, ...links.map((link) => `- ${link.text ? `${link.text}: ` : ""}${link.url}`)] : []
+      ];
       const { text: text2, truncated: truncated2 } = truncateContext(lines.join("\n"));
       return {
         truncated: truncated2,
         chip: {
           providerId: CHIP_PROVIDER_ID,
-          id: `sel-${shortHash(`${itemId ?? ""}\0${quoted}`)}`,
+          id: `sel-${shortHash(`${itemId ?? ""}\0${quoted}\0${links.map((link) => link.url).join(" ")}`)}`,
           title: `Trecho: \xAB${excerptOf(quoted)}\xBB`,
           url: CHIP_URL,
           text: text2,
@@ -2166,125 +2387,163 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   }
 
-  // src/canvas/sanitize.ts
-  var ALLOWED_TAGS = /* @__PURE__ */ new Set([
-    "div",
-    "span",
-    "p",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "ul",
-    "ol",
-    "li",
-    "dl",
-    "dt",
-    "dd",
-    "table",
-    "caption",
-    "thead",
-    "tbody",
-    "tfoot",
-    "tr",
-    "th",
-    "td",
-    "blockquote",
-    "pre",
-    "code",
-    "strong",
-    "b",
-    "em",
-    "i",
-    "u",
-    "s",
-    "mark",
-    "small",
-    "sub",
-    "sup",
-    "kbd",
-    "br",
-    "hr",
-    "section",
-    "article",
-    "header",
-    "footer",
-    "figure",
-    "figcaption",
-    "details",
-    "summary"
-  ]);
-  var VOID_TAGS = /* @__PURE__ */ new Set(["br", "hr"]);
-  var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
-  var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-  var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-  var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
-  function validateTree(value) {
-    let nodes = 0;
-    let items = 0;
-    const seen = /* @__PURE__ */ new Set();
-    const walk = (raw, depth) => {
-      if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
-      const node = raw;
-      if (node.t === "text") {
-        return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
-      }
-      if (depth > LIMITS.depth) return null;
-      if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
-      if (typeof node.attrs !== "object" || node.attrs === null || !Array.isArray(node.c)) return null;
-      const attrs = {};
-      for (const [name, attr] of Object.entries(node.attrs)) {
-        if (typeof attr !== "string") return null;
-        if (name === "class") {
-          const tokens = attr.split(/\s+/).filter(Boolean);
-          if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
-          attrs.class = tokens.join(" ");
-        } else if (name === "title") {
-          if (attr.length > 200) return null;
-          attrs.title = attr;
-        } else if (name === "colspan" || name === "rowspan") {
-          if (!/^[1-9][0-9]?$/.test(attr)) return null;
-          attrs[name] = attr;
-        } else if (name === "data-canvas-item") {
-          if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
-          seen.add(attr);
-          attrs[name] = attr;
-        } else {
-          return null;
-        }
-      }
-      if (VOID_TAGS.has(node.tag) && node.c.length > 0) return null;
-      const c = [];
-      for (const child of node.c) {
-        const clean = walk(child, depth + 1);
-        if (!clean) return null;
-        c.push(clean);
-      }
-      return { t: "el", tag: node.tag, attrs, c };
-    };
-    if (!Array.isArray(value)) return null;
-    const tree = [];
-    for (const child of value) {
-      const clean = walk(child, 1);
-      if (!clean) return null;
-      tree.push(clean);
-    }
-    return tree;
+  // src/canvas/embed-frame.ts
+  var EMBED_SANDBOX = "allow-scripts";
+  var EMBED_THEME_VARS = [
+    "--oc-bg",
+    "--oc-elevated",
+    "--oc-fg",
+    "--oc-muted",
+    "--oc-subtle",
+    "--oc-border",
+    "--oc-primary",
+    "--oc-primary-text",
+    "--oc-success",
+    "--oc-success-text",
+    "--oc-warning",
+    "--oc-warning-text",
+    "--oc-error",
+    "--oc-error-text",
+    "--oc-info",
+    "--oc-info-text",
+    "--oc-font",
+    "--oc-mono",
+    "--oc-radius"
+  ];
+  var EMBED_CSP = [
+    "default-src 'none'",
+    "script-src 'unsafe-inline'",
+    "style-src 'unsafe-inline'",
+    "img-src data: blob:",
+    "font-src data:",
+    "media-src data:",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'"
+  ].join("; ");
+  var SAFE_VALUE = /^[^<>{};\u0000-\u001f]{1,200}$/;
+  var BASE_CSS = [
+    "html,body{margin:0;padding:0;background:transparent}",
+    "body{display:flow-root;color:var(--oc-fg);font:13px/1.45 var(--oc-font,system-ui,sans-serif)}",
+    "a{color:var(--oc-primary-text,var(--oc-primary))}",
+    "code,pre{font-family:var(--oc-mono,monospace)}",
+    ":root{--chart-1:var(--oc-primary-text,var(--oc-primary));--chart-2:var(--oc-success);--chart-3:var(--oc-warning);--chart-4:var(--oc-error);--chart-5:var(--oc-info);--chart-6:var(--oc-muted)}"
+  ].join("");
+  var BRIDGE = `(function(){var P=window.parent;function send(k,v){try{P.postMessage({cvEmbed:1,k:k,v:v},"*")}catch(e){}}
+function measure(){var b=document.body;if(b)send("h",Math.ceil(b.getBoundingClientRect().height))}
+function start(){measure();if(typeof ResizeObserver==="function"&&document.body)new ResizeObserver(measure).observe(document.body)}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
+window.addEventListener("load",measure);
+document.addEventListener("click",function(e){var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;e.preventDefault();send("l",a.href)},true);})();`;
+  function buildEmbedDocument(html, theme, colorScheme2) {
+    const vars = EMBED_THEME_VARS.flatMap((name) => {
+      const value = (theme[name] ?? "").trim();
+      return SAFE_VALUE.test(value) ? [`${name}:${value}`] : [];
+    });
+    return [
+      '<!doctype html><html><head><meta charset="utf-8">',
+      `<meta http-equiv="Content-Security-Policy" content="${EMBED_CSP}">`,
+      `<meta name="color-scheme" content="${colorScheme2}">`,
+      `<style>:root{color-scheme:${colorScheme2};${vars.join(";")}}${BASE_CSS}</style>`,
+      `<script>${BRIDGE}<\/script>`,
+      "</head><body>",
+      html,
+      "</body></html>"
+    ].join("");
   }
-  function structureSignature(nodes) {
-    const parts = [];
-    const walk = (list) => {
+  var HEIGHT_MIN = 20;
+  function readEmbedMessage(data) {
+    if (typeof data !== "object" || data === null) return null;
+    const message = data;
+    if (message.cvEmbed !== 1) return null;
+    if (message.k === "h") {
+      if (typeof message.v !== "number" || !Number.isFinite(message.v)) return null;
+      return { kind: "height", value: Math.min(LIMITS.embedHeightMax, Math.max(HEIGHT_MIN, Math.round(message.v))) };
+    }
+    if (message.k === "l" && typeof message.v === "string") {
+      const url = cleanHref(message.v);
+      return url ? { kind: "link", url } : null;
+    }
+    return null;
+  }
+  function hasUserGesture(nav) {
+    return nav?.userActivation ? nav.userActivation.isActive : true;
+  }
+
+  // src/canvas/filter.ts
+  var NO_FILTER = { query: "", group: "" };
+  var SEARCH_CHARS = 2e3;
+  function collectFilterItems(tree) {
+    const items = [];
+    const walk = (list, inherited) => {
       for (const node of list) {
         if (node.t !== "el") continue;
-        parts.push(node.tag);
-        walk(node.c);
-        parts.push("/");
+        const group = node.attrs["data-group"] ?? inherited;
+        const id = node.attrs["data-canvas-item"];
+        if (id) items.push({ id, haystack: `${textOf(node.c, SEARCH_CHARS)} ${group ?? ""}`.replace(/\s+/g, " ").toLowerCase(), group });
+        walk(node.c, group);
       }
     };
-    walk(nodes);
-    return parts.join(",");
+    walk(tree, null);
+    return items;
+  }
+  function groupsOf(items) {
+    return [...new Set(items.flatMap((item) => item.group ? [item.group] : []))].sort((a, b) => a.localeCompare(b));
+  }
+  function shouldOfferFilter(items) {
+    return items.length >= LIMITS.filterMinItems || groupsOf(items).length >= 2;
+  }
+  function matchesFilter(item, state) {
+    if (state.group !== "" && item.group !== state.group) return false;
+    const words = fold(state.query).split(" ").filter(Boolean);
+    if (words.length === 0) return true;
+    const haystack = fold(item.haystack);
+    return words.every((word) => haystack.includes(word));
+  }
+  function isFiltering(state) {
+    return state.query.trim() !== "" || state.group !== "";
+  }
+  function visibleIds(items, state) {
+    return new Set(items.filter((item) => matchesFilter(item, state)).map((item) => item.id));
+  }
+  function fold(value) {
+    return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  // src/canvas/embeds.ts
+  var EMBED_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+  var CONTROL_CHARS2 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+  function isEmbedId(value) {
+    return typeof value === "string" && EMBED_ID.test(value);
+  }
+  function parseEmbedsInput(value) {
+    if (value === void 0 || value === null) return { ok: true, embeds: {} };
+    if (!Array.isArray(value)) return { ok: false, message: "embeds deve ser uma lista de { id, html }" };
+    if (value.length > LIMITS.embeds) return { ok: false, message: `mais de ${LIMITS.embeds} partes incorporadas` };
+    const embeds = {};
+    let total = 0;
+    for (const entry of value) {
+      if (typeof entry !== "object" || entry === null) return { ok: false, message: "cada embed deve ser { id, html }" };
+      const { id, html } = entry;
+      if (!isEmbedId(id)) return { ok: false, message: "id de embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)" };
+      if (Object.hasOwn(embeds, id)) return { ok: false, message: `embed repetido: ${id}` };
+      if (typeof html !== "string" || html.trim() === "") return { ok: false, message: `o embed ${id} est\xE1 vazio` };
+      if (html.length > LIMITS.embedChars) return { ok: false, message: `o embed ${id} passa de ${LIMITS.embedChars} caracteres` };
+      if (CONTROL_CHARS2.test(html)) return { ok: false, message: `caractere de controle no embed ${id}` };
+      total += html.length;
+      if (total > LIMITS.embedsTotalChars) return { ok: false, message: `os embeds passam de ${LIMITS.embedsTotalChars} caracteres no total` };
+      embeds[id] = html;
+    }
+    return { ok: true, embeds };
+  }
+  function validateEmbeds(value) {
+    if (value === void 0) return {};
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const entries = Object.entries(value).map(([id, html]) => ({ id, html }));
+    const parsed = parseEmbedsInput(entries);
+    return parsed.ok ? parsed.embeds : null;
   }
 
   // src/canvas/panel-state.ts
@@ -2294,12 +2553,14 @@ ${GUEST_UI_LOOK_CSS}`;
     if (!response.canvas) return { kind: "empty", error: cleanError(response.error) };
     const tree = validateTree(response.canvas.tree);
     const updatedAt = response.canvas.updatedAt;
-    if (!tree || !isEpoch(updatedAt)) return { kind: "failed", message: "o canvas guardado est\xE1 corrompido e foi ignorado" };
+    const embeds = validateEmbeds(response.canvas.embeds);
+    if (!tree || !embeds || !isEpoch(updatedAt)) return { kind: "failed", message: "o canvas guardado est\xE1 corrompido e foi ignorado" };
     return {
       kind: "canvas",
       title: typeof response.canvas.title === "string" ? response.canvas.title.slice(0, LIMITS.titleChars) : "",
       updatedAt,
       tree,
+      embeds,
       blocked: Array.isArray(response.canvas.blocked) ? response.canvas.blocked.filter((note) => typeof note === "string").slice(0, BLOCKED_NOTES_MAX).map((note) => note.slice(0, 120)) : [],
       error: cleanError(response.error),
       outdatedService: response.version !== SERVICE_VERSION
@@ -2338,21 +2599,45 @@ ${GUEST_UI_LOOK_CSS}`;
   }
 
   // src/canvas/view.ts
-  function buildNodes(nodes, doc = document, onItem) {
+  var LINK_ATTRIBUTE = "data-href";
+  function mapClass(token) {
+    return `cv-${token.startsWith("oc-") && token.length > 3 ? token.slice(3) : token}`;
+  }
+  function buildNodes(nodes, doc = document, hooks = {}) {
     const fragment = doc.createDocumentFragment();
     for (const node of nodes) {
       if (node.t === "text") {
         fragment.append(doc.createTextNode(node.v));
         continue;
       }
+      const embedId = node.attrs["data-embed"];
+      if (embedId && hooks.embed) {
+        const height = node.attrs["data-height"];
+        const frame = hooks.embed(embedId, height ? Number(height) : null);
+        if (frame) {
+          fragment.append(frame);
+          continue;
+        }
+      }
       const element = doc.createElement(node.tag);
       for (const [name, value] of Object.entries(node.attrs)) {
-        if (name === "class") element.className = value.split(" ").map((token) => `cv-${token}`).join(" ");
-        else element.setAttribute(name, value);
+        if (name === "class") element.className = value.split(" ").map(mapClass).join(" ");
+        else if (name === "href") {
+          element.setAttribute(LINK_ATTRIBUTE, value);
+          element.setAttribute("role", "link");
+          element.setAttribute("tabindex", "0");
+          if (!node.attrs.title) element.setAttribute("title", value);
+        } else if (name === "title" && node.attrs.href) element.setAttribute("title", `${value}
+${node.attrs.href}`);
+        else if (name === "data-value") {
+          element.setAttribute(name, value);
+          element.style.setProperty("--value", `${value}%`);
+          element.style.setProperty("--n", value);
+        } else element.setAttribute(name, value);
       }
-      element.append(buildNodes(node.c, doc, onItem));
+      element.append(buildNodes(node.c, doc, hooks));
       const itemId = node.attrs["data-canvas-item"];
-      if (itemId && onItem) onItem(element, itemId);
+      if (itemId && hooks.onItem) hooks.onItem(element, itemId);
       fragment.append(element);
     }
     return fragment;
@@ -2363,6 +2648,7 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // src/main.ts
   var POLL_MS = 1500;
+  var EMBED_INITIAL_HEIGHT = 160;
   var host = connectHost();
   function required(id) {
     const element = document.getElementById(id);
@@ -2427,9 +2713,10 @@ ${GUEST_UI_LOOK_CSS}`;
     const anchor = range.commonAncestorContainer;
     const element = anchor instanceof Element ? anchor : anchor.parentElement;
     const itemId = element?.closest("[data-canvas-item]")?.getAttribute("data-canvas-item") ?? null;
+    const links = [...content.querySelectorAll(`a[${LINK_ATTRIBUTE}]`)].filter((anchor2) => range.intersectsNode(anchor2)).map((anchor2) => ({ text: anchor2.textContent ?? "", url: anchor2.getAttribute(LINK_ATTRIBUTE) ?? "" }));
     const rects = range.getClientRects();
     const rect = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
-    return { picked: { text, itemId }, rect };
+    return { picked: { text, itemId, links }, rect };
   }
   function hideToolbar() {
     toolbar.hidden = true;
@@ -2442,8 +2729,8 @@ ${GUEST_UI_LOOK_CSS}`;
   function commentSelection() {
     const found = pickedSelection();
     if (!found) return;
-    const { text, itemId } = found.picked;
-    void actions.addToContext({ kind: "selection", text, ...itemId ? { itemId } : {} }).then((result) => {
+    const { text, itemId, links } = found.picked;
+    void actions.addToContext({ kind: "selection", text, ...itemId ? { itemId } : {}, ...links.length ? { links } : {} }).then((result) => {
       report(result, "Trecho adicionado \xE0 caixa de mensagem. Escreva seu coment\xE1rio e envie.");
       if (result.ok) clearSelection();
     });
@@ -2488,6 +2775,123 @@ ${GUEST_UI_LOOK_CSS}`;
       updateToolbar();
     });
   }
+  function openLink(url) {
+    const clean = cleanHref(url);
+    if (!clean) return;
+    void host.openUrl(clean).catch(() => void host.toast({ kind: "error", message: "N\xE3o foi poss\xEDvel abrir o link." }).catch(() => {
+    }));
+  }
+  function linkOf(target) {
+    return target instanceof Element ? target.closest(`a[${LINK_ATTRIBUTE}]`) : null;
+  }
+  scroll.addEventListener("click", (event) => {
+    const link = linkOf(event.target);
+    if (!link) return;
+    event.preventDefault();
+    const selection2 = document.getSelection();
+    if (selection2 && !selection2.isCollapsed && scroll.contains(selection2.anchorNode)) return;
+    openLink(link.getAttribute(LINK_ATTRIBUTE) ?? "");
+  });
+  scroll.addEventListener("auxclick", (event) => {
+    if (linkOf(event.target)) event.preventDefault();
+  });
+  scroll.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const link = linkOf(event.target);
+    if (!link) return;
+    event.preventDefault();
+    openLink(link.getAttribute(LINK_ATTRIBUTE) ?? "");
+  });
+  var embedFrames = /* @__PURE__ */ new Map();
+  function themeVars() {
+    const computed = getComputedStyle(document.documentElement);
+    return Object.fromEntries(EMBED_THEME_VARS.map((name) => [name, computed.getPropertyValue(name)]));
+  }
+  function colorScheme() {
+    return getComputedStyle(document.documentElement).colorScheme.includes("light") ? "light" : "dark";
+  }
+  function themeSignature() {
+    return `${colorScheme()}|${EMBED_THEME_VARS.map((name) => getComputedStyle(document.documentElement).getPropertyValue(name)).join("|")}`;
+  }
+  function makeEmbed(id, height) {
+    if (view.kind !== "canvas") return null;
+    const html = view.embeds[id];
+    if (html === void 0) return null;
+    const frame = document.createElement("iframe");
+    frame.className = "ui-embed";
+    frame.setAttribute("sandbox", EMBED_SANDBOX);
+    frame.setAttribute("referrerpolicy", "no-referrer");
+    frame.title = `Visualiza\xE7\xE3o incorporada: ${id}`;
+    frame.style.height = `${height ?? EMBED_INITIAL_HEIGHT}px`;
+    frame.srcdoc = buildEmbedDocument(html, themeVars(), colorScheme());
+    embedFrames.set(frame, height !== null);
+    return frame;
+  }
+  window.addEventListener("message", (event) => {
+    const message = readEmbedMessage(event.data);
+    if (!message) return;
+    for (const [frame, fixed] of embedFrames) {
+      if (frame.contentWindow !== event.source) continue;
+      if (message.kind === "height") {
+        if (!fixed) frame.style.height = `${message.value}px`;
+      } else if (hasUserGesture(navigator)) {
+        openLink(message.url);
+      }
+      return;
+    }
+  });
+  var filterInput = el2("input", "ui-input");
+  filterInput.type = "search";
+  filterInput.placeholder = "Filtrar\u2026";
+  filterInput.setAttribute("aria-label", "Filtrar itens do canvas");
+  var filterSelect = el2("select", "ui-input ui-select");
+  filterSelect.setAttribute("aria-label", "Filtrar por grupo");
+  var filterCount = el2("span", "ui-count");
+  var filterBar = el2("div", "ui-filter");
+  filterBar.append(filterInput, filterSelect, filterCount);
+  var filterState = NO_FILTER;
+  var filterItems = [];
+  function option(value, label) {
+    const node = el2("option", void 0, label);
+    node.value = value;
+    return node;
+  }
+  function applyFilter() {
+    const content = scroll.querySelector(".cv");
+    if (!content) return;
+    const filtering = isFiltering(filterState);
+    const visible = visibleIds(filterItems, filterState);
+    for (const section of content.querySelectorAll("section:not([data-canvas-item])")) {
+      const inner = [...section.querySelectorAll("[data-canvas-item]")];
+      section.classList.toggle("ui-hidden", filtering && inner.length > 0 && !inner.some((node) => visible.has(node.getAttribute("data-canvas-item") ?? "")));
+    }
+    for (const node of content.querySelectorAll("[data-canvas-item]")) {
+      node.classList.toggle("ui-hidden", filtering && !visible.has(node.getAttribute("data-canvas-item") ?? ""));
+    }
+    filterCount.textContent = !filtering ? `${filterItems.length} itens` : visible.size === 0 ? "Nenhum resultado" : `${visible.size} de ${filterItems.length}`;
+  }
+  filterInput.addEventListener("input", () => {
+    filterState = { ...filterState, query: filterInput.value };
+    applyFilter();
+  });
+  filterSelect.addEventListener("change", () => {
+    filterState = { ...filterState, group: filterSelect.value };
+    applyFilter();
+  });
+  function syncFilter(tree) {
+    filterItems = collectFilterItems(tree);
+    if (!shouldOfferFilter(filterItems)) {
+      filterState = NO_FILTER;
+      return false;
+    }
+    const groups = groupsOf(filterItems);
+    if (filterState.group !== "" && !groups.includes(filterState.group)) filterState = { ...filterState, group: "" };
+    filterSelect.replaceChildren(option("", "Todos os grupos"), ...groups.map((group) => option(group, group)));
+    filterSelect.value = filterState.group;
+    filterSelect.hidden = groups.length < 2;
+    if (filterInput.value !== filterState.query) filterInput.value = filterState.query;
+    return true;
+  }
   function makeItemKeyboardReachable(element, id) {
     element.tabIndex = 0;
     element.setAttribute("role", "group");
@@ -2499,11 +2903,13 @@ ${GUEST_UI_LOOK_CSS}`;
     });
   }
   function render() {
-    const key = JSON.stringify(view);
+    const key = view.kind === "canvas" && Object.keys(view.embeds).length ? `${JSON.stringify(view)}${themeSignature()}` : JSON.stringify(view);
     if (key === lastRendered) return;
     lastRendered = key;
     const head = [];
     const body = [];
+    const hadFilterFocus = filterBar.contains(document.activeElement);
+    embedFrames.clear();
     switch (view.kind) {
       case "no-session":
         body.push(el2("div", "empty", "Abra uma sess\xE3o para ver o canvas dela."));
@@ -2528,15 +2934,18 @@ ${GUEST_UI_LOOK_CSS}`;
         head.push(header);
         if (view.outdatedService) head.push(banner("warning", "O servi\xE7o da extens\xE3o est\xE1 desatualizado: pause e retome a extens\xE3o em Settings \u2192 Extensions."));
         if (view.error) head.push(banner("error", `\xDAltima publica\xE7\xE3o recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
-        if (view.blocked.length) head.push(banner("warning", `Conte\xFAdo bloqueado e removido: ${view.blocked.join(", ")}.`));
+        if (view.blocked.length) head.push(banner("warning", `Avisos do canvas: ${view.blocked.join(", ")}.`));
+        if (syncFilter(view.tree)) head.push(filterBar);
         const content = el2("div", "cv");
-        content.append(buildNodes(view.tree, document, makeItemKeyboardReachable));
+        content.append(buildNodes(view.tree, document, { onItem: makeItemKeyboardReachable, embed: makeEmbed }));
         body.push(content);
         break;
       }
     }
     top.replaceChildren(...head);
     scroll.replaceChildren(...body);
+    if (view.kind === "canvas") applyFilter();
+    if (hadFilterFocus && head.includes(filterBar)) filterInput.focus({ preventScroll: true });
     if (view.kind === "canvas") {
       const signature = structureSignature(view.tree);
       if (signature !== lastSignature) scroll.scrollTop = 0;
@@ -2581,6 +2990,8 @@ ${GUEST_UI_LOOK_CSS}`;
     inflightFor = null;
     dirty = false;
     hideToolbar();
+    filterState = NO_FILTER;
+    filterInput.value = "";
     view = next ? { kind: "loading" } : { kind: "no-session" };
     viewOwner = next;
     render();

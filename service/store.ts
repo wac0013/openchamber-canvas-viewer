@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { validateEmbeds } from "../src/canvas/embeds.ts";
 import { validateTree } from "../src/canvas/sanitize.ts";
 import { buildSnapshot } from "../src/canvas/snapshot.ts";
 import { BLOCKED_NOTES_MAX, SESSION_ID_PATTERN, type CanvasRecord } from "../src/shared/contract.ts";
@@ -24,7 +25,7 @@ export type Store = {
   read(sessionId: string): Promise<CanvasRecord | null>;
   remove(sessionId: string): Promise<void>;
   /** Devolve `null` quando a publicação foi descartada por exclusão concorrente da sessão. */
-  publish(sessionId: string, title: unknown, html: unknown, now: number, options?: PublishOptions): Promise<CanvasRecord | null>;
+  publish(sessionId: string, title: unknown, html: unknown, now: number, options?: PublishOptions, embeds?: unknown): Promise<CanvasRecord | null>;
   /** Registra uma publicação recusada sem tocar no canvas vigente. */
   reject(sessionId: string, message: string, now: number, options?: PublishOptions): Promise<CanvasRecord | null>;
   generation(sessionId: string): number;
@@ -69,7 +70,9 @@ export function createStore(dataDir: string): Store {
         const tree = validateTree(canvas.tree);
         if (!tree || typeof canvas.updatedAt !== "number" || typeof canvas.title !== "string") return null;
         const blocked = Array.isArray(canvas.blocked) ? canvas.blocked.filter((note): note is string => typeof note === "string").slice(0, BLOCKED_NOTES_MAX) : [];
-        return { sessionId, canvas: { title: canvas.title, updatedAt: canvas.updatedAt, tree, blocked }, error: readError(value.error) };
+        const embeds = validateEmbeds(canvas.embeds);
+        if (!embeds) return null;
+        return { sessionId, canvas: { title: canvas.title, updatedAt: canvas.updatedAt, tree, blocked, embeds }, error: readError(value.error) };
       }
       return { sessionId, canvas: null, error: readError(value.error) };
     } catch {
@@ -106,11 +109,11 @@ export function createStore(dataDir: string): Store {
         await rm(fileOf(sessionId), { force: true });
       });
     },
-    publish: async (sessionId, title, html, now, options) => {
+    publish: async (sessionId, title, html, now, options, embeds) => {
       fileOf(sessionId);
       return locked(sessionId, async () => {
         if (outdated(sessionId, options)) return null;
-        const built = buildSnapshot(title, html, now);
+        const built = buildSnapshot(title, html, now, embeds);
         if (!built.ok) return rejectLocked(sessionId, built.message, now);
         const record: CanvasRecord = { sessionId, canvas: built.snapshot, error: null };
         await write(record);

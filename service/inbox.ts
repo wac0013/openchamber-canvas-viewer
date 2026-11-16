@@ -18,7 +18,7 @@ import type { Store } from "./store.ts";
 const FILE_NAME = /^([A-Za-z0-9_-]{1,128})\.json$/;
 const CLAIMED_NAME = /^([A-Za-z0-9_-]{1,128})\.json\.[0-9a-f-]{36}\.proc$/;
 /** HTML no limite com o pior escape de JSON (surrogate solto = 6 bytes) + margem do envelope. */
-const MAX_FILE_BYTES = LIMITS.htmlChars * 6 + 4096;
+const MAX_FILE_BYTES = (LIMITS.htmlChars + LIMITS.embedsTotalChars) * 6 + 8192;
 /** Reivindicação abandonada (processo morreu no meio) é descartada depois deste tempo. */
 const STALE_CLAIM_MS = 60_000;
 /** Falhas de I/O seguidas de uma sessão antes de a publicação ser registrada como recusada. */
@@ -29,7 +29,7 @@ export type DrainOptions = {
   onError?: (sessionId: string, error: unknown) => void;
 };
 
-type Payload = { ok: true; title: unknown; html: unknown } | { ok: false; message: string };
+type Payload = { ok: true; title: unknown; html: unknown; embeds: unknown } | { ok: false; message: string };
 
 async function readPayload(file: string, sessionId: string): Promise<Payload> {
   const info = await lstat(file);
@@ -44,7 +44,7 @@ async function readPayload(file: string, sessionId: string): Promise<Payload> {
   if (typeof payload !== "object" || payload === null) return { ok: false, message: "a publicação não é um objeto" };
   if (payload.v !== INBOX_SCHEMA_VERSION) return { ok: false, message: "versão de publicação não suportada" };
   if (payload.sessionId !== sessionId) return { ok: false, message: "a publicação não pertence a esta sessão" };
-  return { ok: true, title: payload.title, html: payload.html };
+  return { ok: true, title: payload.title, html: payload.html, embeds: payload.embeds };
 }
 
 /** Processa tudo o que está na caixa; devolve as sessões cujo registro mudou. */
@@ -71,7 +71,7 @@ export async function drainInbox(inbox: string, store: Store, now: () => number,
     try {
       const payload = await readPayload(claimed, sessionId);
       const record = payload.ok
-        ? await store.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation })
+        ? await store.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation }, payload.embeds)
         : await store.reject(sessionId, payload.message, now(), { expectedGeneration: generation });
       if (record) changed.push(sessionId);
       attempts.delete(sessionId);

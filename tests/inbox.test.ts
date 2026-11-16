@@ -87,7 +87,7 @@ describe("drainInbox", () => {
   it("arquivo gigante é recusado com mensagem de tamanho e apagado", async () => {
     const store = createStore(root);
     await drainInbox(inbox, store, () => 1);
-    await deposit("ses_a.json", "x".repeat(LIMITS.htmlChars * 6 + 5000));
+    await deposit("ses_a.json", "x".repeat((LIMITS.htmlChars + LIMITS.embedsTotalChars) * 6 + 9000));
     await drainInbox(inbox, store, () => 2);
     assert.match((await store.read("ses_a"))?.error?.message ?? "", /maior que o limite/);
     assert.deepEqual(await readdir(inbox), []);
@@ -196,5 +196,18 @@ describe("drainInbox", () => {
     await utimes(old, new Date(1000), new Date(1000));
     await drainInbox(inbox, store, () => Date.now());
     assert.deepEqual(await readdir(inbox), ["ses_b.json.22222222-2222-2222-2222-222222222222.proc"]);
+  });
+
+  it("publica as partes incorporadas do arquivo e revalida (não confia no plugin)", async () => {
+    const store = createStore(root);
+    await drainInbox(inbox, store, () => 1);
+    await deposit("ses_a.json", { ...valid("ses_a", '<div data-embed="g">alt</div>'), embeds: [{ id: "g", html: "<svg></svg>" }] });
+    await drainInbox(inbox, store, () => 5);
+    assert.deepEqual((await store.read("ses_a"))?.canvas?.embeds, { g: "<svg></svg>" });
+    await deposit("ses_a.json", { ...valid("ses_a", '<div data-embed="g">alt</div>'), embeds: [{ id: "G!", html: "<svg></svg>" }] });
+    await drainInbox(inbox, store, () => 6);
+    const record = await store.read("ses_a");
+    assert.deepEqual(record?.canvas?.embeds, { g: "<svg></svg>" });
+    assert.equal(record?.error?.at, 6);
   });
 });

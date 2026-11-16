@@ -48,11 +48,10 @@ describe("parseCanvasHtml — o proibido é removido e o resto segue (CA8)", () 
     assert.deepEqual(blocked.sort(), ["<iframe>", "<object>", "<style>", "<svg>", "<template>"]);
   });
 
-  it("remove imagens, links e mídia sem conteúdo; desembrulha <a> e <button> mantendo o texto", () => {
-    const { tree, blocked } = ok('<img src="http://x/a.png"><a href="javascript:alert(1)">clique</a><button>ok</button><input value=1>');
-    assert.equal(textOf(tree), "cliqueok");
-    assert.ok(blocked.includes("<img>") && blocked.includes("<a>") && blocked.includes("<button>") && blocked.includes("<input>"));
-    assert.equal(JSON.stringify(tree).includes("javascript"), false);
+  it("remove imagens e mídia sem conteúdo; desembrulha <button> e <input> mantendo o texto", () => {
+    const { tree, blocked } = ok('<img src="http://x/a.png"><button>ok</button><input value=1><form action="x">f</form>');
+    assert.equal(textOf(tree), "okf");
+    assert.ok(blocked.includes("<img>") && blocked.includes("<button>") && blocked.includes("<input>") && blocked.includes("<form>"));
   });
 
   it("remove handlers on*, href, src, style e atributos desconhecidos", () => {

@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { buildChip, DATA_NOTICE, SELECTION_LINE } from "../src/canvas/context.ts";
+import { parseEmbedsInput } from "../src/canvas/embeds.ts";
 import { ALLOWED_TAGS, parseCanvasHtml } from "../src/canvas/sanitize.ts";
 import { LIMITS } from "../src/shared/contract.ts";
 
@@ -103,9 +104,14 @@ describe("exemplos prontos (CA3/CA5)", () => {
     return [...text.matchAll(/```html\n([\s\S]*?)```/g)].map((match) => match[1]!);
   }
 
-  it("são 3 (acompanhamento, comparação, fluxo) e passam no sanitizador real sem nada bloqueado", async () => {
+  async function embedBlocks(): Promise<string[]> {
+    const text = await readFile(path.join(skillsDir, "openchamber-canvas", "references", "examples.md"), "utf8");
+    return [...text.matchAll(/```embed\n([\s\S]*?)```/g)].map((match) => match[1]!);
+  }
+
+  it("são 5 (acompanhamento, comparação, fluxograma, painel com filtro, parte incorporada) e passam no sanitizador real sem nada bloqueado", async () => {
     const blocks = await examples();
-    assert.equal(blocks.length, 3);
+    assert.equal(blocks.length, 5);
     for (const html of blocks) {
       const parsed = parseCanvasHtml(html);
       assert.equal(parsed.ok, true, parsed.ok ? "" : parsed.message);
@@ -128,7 +134,7 @@ describe("exemplos prontos (CA3/CA5)", () => {
       for (const match of html.matchAll(/class="([^"]+)"/g)) {
         for (const token of match[1]!.split(" ")) assert.ok(css.has(token), `classe sem estilo: ${token}`);
       }
-      assert.doesNotMatch(html, /style=|color:|#[0-9a-f]{3,6}\b/i);
+      assert.doesNotMatch(html, /style=|color:|(?<![\w])#[0-9a-f]{3,6}\b/i);
     }
   });
 
@@ -139,5 +145,57 @@ describe("exemplos prontos (CA3/CA5)", () => {
         assert.ok(cells <= 4);
       }
     }
+  });
+
+  it("o exemplo de parte incorporada tem o HTML da parte, aceito pelo contrato, sem cor fixa", async () => {
+    const blocks = await embedBlocks();
+    assert.equal(blocks.length, 1);
+    const parsed = parseEmbedsInput([{ id: "falhas", html: blocks[0]! }]);
+    assert.equal(parsed.ok, true);
+    assert.doesNotMatch(blocks[0]!, /#[0-9a-f]{3,6}\b|rgb\(|hsl\(|https?:/i);
+    const html = (await examples())[4]!;
+    assert.match(html, /data-embed="falhas"/);
+  });
+
+  it("o exemplo de painel mostra link, selo com tom, métrica, aviso e grupos (filtro)", async () => {
+    const html = (await examples())[3]!;
+    for (const expected of ['href="https://', 'class="badge" data-tone=', 'class="stat"', 'class="callout"', "data-group="]) assert.ok(html.includes(expected), expected);
+  });
+});
+
+describe("referência de componentes", () => {
+  async function snippets(): Promise<string[]> {
+    const text = await readFile(path.join(skillsDir, "openchamber-canvas", "references", "components.md"), "utf8");
+    return [...text.matchAll(/```html\n([\s\S]*?)```/g)].map((match) => match[1]!);
+  }
+
+  it("todo trecho passa no sanitizador real sem nada bloqueado", async () => {
+    const blocks = await snippets();
+    assert.ok(blocks.length >= 10);
+    for (const html of blocks) {
+      const parsed = parseCanvasHtml(html);
+      assert.equal(parsed.ok, true, parsed.ok ? "" : parsed.message);
+      if (parsed.ok) assert.deepEqual(parsed.blocked, []);
+    }
+  });
+
+  it("só usa classes que o painel estiliza e nenhuma cor própria", async () => {
+    const css = await panelClasses();
+    for (const html of await snippets()) {
+      for (const match of html.matchAll(/class="([^"]+)"/g)) {
+        for (const token of match[1]!.split(" ")) assert.ok(css.has(token), `classe sem estilo: ${token}`);
+      }
+      assert.doesNotMatch(html, /style=|color:|(?<![\w])#[0-9a-f]{3,6}\b/i);
+    }
+  });
+
+  it("cobre fluxograma e os três gráficos que a skill manda considerar", async () => {
+    const text = await readFile(path.join(skillsDir, "openchamber-canvas", "references", "components.md"), "utf8");
+    for (const expected of ['class="flow"', 'class="flow-col"', 'class="chart"', 'class="stack"', 'class="columns"', "data-embed"]) assert.ok(text.includes(expected), expected);
+  });
+
+  it("a skill manda sempre considerar fluxograma e gráfico, e documenta links, filtro e embeds", async () => {
+    const text = await readFile(path.join(skillsDir, "openchamber-canvas", "SKILL.md"), "utf8");
+    for (const expected of ["Sempre considere um fluxograma ou um gráfico", "## Links", "## Filtro automático e grupos", "## Partes incorporadas", "data-embed", "oc-"]) assert.ok(text.includes(expected), expected);
   });
 });

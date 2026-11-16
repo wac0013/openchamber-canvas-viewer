@@ -4,13 +4,17 @@ import { connectHost } from "@openchamber/sdk";
 import { applyHostReady } from "@openchamber/sdk/ui";
 
 import { createActions, FAILURE_MESSAGES, type ActionResult } from "./canvas/actions.ts";
-import { normalizeSelection } from "./canvas/context.ts";
+import { normalizeSelection, type SelectionLink } from "./canvas/context.ts";
+import { buildEmbedDocument, EMBED_SANDBOX, EMBED_THEME_VARS, hasUserGesture, readEmbedMessage } from "./canvas/embed-frame.ts";
+import { collectFilterItems, groupsOf, isFiltering, NO_FILTER, shouldOfferFilter, visibleIds, type FilterItem, type FilterState } from "./canvas/filter.ts";
 import { parseCanvasResponse, viewFromResponse, type PanelView } from "./canvas/panel-state.ts";
-import { structureSignature } from "./canvas/sanitize.ts";
+import { cleanHref, structureSignature } from "./canvas/sanitize.ts";
 import { isInView, placeToolbar } from "./canvas/toolbar-position.ts";
-import { buildNodes, formatTime } from "./canvas/view.ts";
+import { buildNodes, formatTime, LINK_ATTRIBUTE } from "./canvas/view.ts";
 
 const POLL_MS = 1500;
+/** Altura de uma parte incorporada até ela informar a real (ou quando o agente não fixou `data-height`). */
+const EMBED_INITIAL_HEIGHT = 160;
 
 const host = connectHost();
 
@@ -75,7 +79,7 @@ toolbar.hidden = true;
 document.body.append(toolbar);
 toolbar.addEventListener("mousedown", (event) => event.preventDefault());
 
-type Picked = { text: string; itemId: string | null };
+type Picked = { text: string; itemId: string | null; links: SelectionLink[] };
 
 /** Seleção atual, se estiver inteira dentro do conteúdo do canvas (nunca do cabeçalho ou da barra). */
 function pickedSelection(): { picked: Picked; rect: DOMRect } | null {
@@ -89,9 +93,12 @@ function pickedSelection(): { picked: Picked; rect: DOMRect } | null {
   const anchor = range.commonAncestorContainer;
   const element = anchor instanceof Element ? anchor : anchor.parentElement;
   const itemId = element?.closest("[data-canvas-item]")?.getAttribute("data-canvas-item") ?? null;
+  const links = [...content.querySelectorAll(`a[${LINK_ATTRIBUTE}]`)]
+    .filter((anchor) => range.intersectsNode(anchor))
+    .map((anchor) => ({ text: anchor.textContent ?? "", url: anchor.getAttribute(LINK_ATTRIBUTE) ?? "" }));
   const rects = range.getClientRects();
   const rect = rects.length ? rects[rects.length - 1]! : range.getBoundingClientRect();
-  return { picked: { text, itemId }, rect };
+  return { picked: { text, itemId, links }, rect };
 }
 
 function hideToolbar(): void {
@@ -107,8 +114,8 @@ function clearSelection(): void {
 function commentSelection(): void {
   const found = pickedSelection();
   if (!found) return;
-  const { text, itemId } = found.picked;
-  void actions.addToContext({ kind: "selection", text, ...(itemId ? { itemId } : {}) }).then((result) => {
+  const { text, itemId, links } = found.picked;
+  void actions.addToContext({ kind: "selection", text, ...(itemId ? { itemId } : {}), ...(links.length ? { links } : {}) }).then((result) => {
     report(result, "Trecho adicionado à caixa de mensagem. Escreva seu comentário e envie.");
     if (result.ok) clearSelection();
   });
@@ -157,6 +164,142 @@ function scheduleToolbar(): void {
   });
 }
 
+/** Abre um link do canvas fora do painel (o iframe não navega). Só http/https; o host ainda confere. */
+function openLink(url: string): void {
+  const clean = cleanHref(url);
+  if (!clean) return;
+  void host.openUrl(clean).catch(() => void host.toast({ kind: "error", message: "Não foi possível abrir o link." }).catch(() => {}));
+}
+
+function linkOf(target: EventTarget | null): Element | null {
+  return target instanceof Element ? target.closest(`a[${LINK_ATTRIBUTE}]`) : null;
+}
+
+scroll.addEventListener("click", (event) => {
+  const link = linkOf(event.target);
+  if (!link) return;
+  event.preventDefault();
+  const selection = document.getSelection();
+  if (selection && !selection.isCollapsed && scroll.contains(selection.anchorNode)) return;
+  openLink(link.getAttribute(LINK_ATTRIBUTE) ?? "");
+});
+scroll.addEventListener("auxclick", (event) => {
+  if (linkOf(event.target)) event.preventDefault();
+});
+scroll.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  const link = linkOf(event.target);
+  if (!link) return;
+  event.preventDefault();
+  openLink(link.getAttribute(LINK_ATTRIBUTE) ?? "");
+});
+
+/** Partes incorporadas desenhadas agora: iframe → altura fixa pelo agente? */
+const embedFrames = new Map<HTMLIFrameElement, boolean>();
+
+function themeVars(): Record<string, string> {
+  const computed = getComputedStyle(document.documentElement);
+  return Object.fromEntries(EMBED_THEME_VARS.map((name) => [name, computed.getPropertyValue(name)]));
+}
+
+function colorScheme(): "light" | "dark" {
+  return getComputedStyle(document.documentElement).colorScheme.includes("light") ? "light" : "dark";
+}
+
+/** Assinatura do tema: mudou o tema, as partes incorporadas são redesenhadas com as cores novas. */
+function themeSignature(): string {
+  return `${colorScheme()}|${EMBED_THEME_VARS.map((name) => getComputedStyle(document.documentElement).getPropertyValue(name)).join("|")}`;
+}
+
+function makeEmbed(id: string, height: number | null): HTMLElement | null {
+  if (view.kind !== "canvas") return null;
+  const html = view.embeds[id];
+  if (html === undefined) return null;
+  const frame = document.createElement("iframe");
+  frame.className = "ui-embed";
+  frame.setAttribute("sandbox", EMBED_SANDBOX);
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.title = `Visualização incorporada: ${id}`;
+  frame.style.height = `${height ?? EMBED_INITIAL_HEIGHT}px`;
+  frame.srcdoc = buildEmbedDocument(html, themeVars(), colorScheme());
+  embedFrames.set(frame, height !== null);
+  return frame;
+}
+
+window.addEventListener("message", (event) => {
+  const message = readEmbedMessage(event.data);
+  if (!message) return;
+  for (const [frame, fixed] of embedFrames) {
+    if (frame.contentWindow !== event.source) continue;
+    if (message.kind === "height") {
+      if (!fixed) frame.style.height = `${message.value}px`;
+    } else if (hasUserGesture(navigator)) {
+      openLink(message.url);
+    }
+    return;
+  }
+});
+
+/** Filtro de texto e de grupo: lógica em canvas/filter.ts; aqui só os controles e o DOM. */
+const filterInput = el("input", "ui-input");
+filterInput.type = "search";
+filterInput.placeholder = "Filtrar…";
+filterInput.setAttribute("aria-label", "Filtrar itens do canvas");
+const filterSelect = el("select", "ui-input ui-select");
+filterSelect.setAttribute("aria-label", "Filtrar por grupo");
+const filterCount = el("span", "ui-count");
+const filterBar = el("div", "ui-filter");
+filterBar.append(filterInput, filterSelect, filterCount);
+
+let filterState: FilterState = NO_FILTER;
+let filterItems: FilterItem[] = [];
+
+function option(value: string, label: string): HTMLOptionElement {
+  const node = el("option", undefined, label);
+  node.value = value;
+  return node;
+}
+
+function applyFilter(): void {
+  const content = scroll.querySelector(".cv");
+  if (!content) return;
+  const filtering = isFiltering(filterState);
+  const visible = visibleIds(filterItems, filterState);
+  for (const section of content.querySelectorAll("section:not([data-canvas-item])")) {
+    const inner = [...section.querySelectorAll("[data-canvas-item]")];
+    section.classList.toggle("ui-hidden", filtering && inner.length > 0 && !inner.some((node) => visible.has(node.getAttribute("data-canvas-item") ?? "")));
+  }
+  for (const node of content.querySelectorAll("[data-canvas-item]")) {
+    node.classList.toggle("ui-hidden", filtering && !visible.has(node.getAttribute("data-canvas-item") ?? ""));
+  }
+  filterCount.textContent = !filtering ? `${filterItems.length} itens` : visible.size === 0 ? "Nenhum resultado" : `${visible.size} de ${filterItems.length}`;
+}
+
+filterInput.addEventListener("input", () => {
+  filterState = { ...filterState, query: filterInput.value };
+  applyFilter();
+});
+filterSelect.addEventListener("change", () => {
+  filterState = { ...filterState, group: filterSelect.value };
+  applyFilter();
+});
+
+/** Prepara a barra para o canvas atual; devolve `true` se ela deve aparecer. */
+function syncFilter(tree: Extract<PanelView, { kind: "canvas" }>["tree"]): boolean {
+  filterItems = collectFilterItems(tree);
+  if (!shouldOfferFilter(filterItems)) {
+    filterState = NO_FILTER;
+    return false;
+  }
+  const groups = groupsOf(filterItems);
+  if (filterState.group !== "" && !groups.includes(filterState.group)) filterState = { ...filterState, group: "" };
+  filterSelect.replaceChildren(option("", "Todos os grupos"), ...groups.map((group) => option(group, group)));
+  filterSelect.value = filterState.group;
+  filterSelect.hidden = groups.length < 2;
+  if (filterInput.value !== filterState.query) filterInput.value = filterState.query;
+  return true;
+}
+
 /** Teclado: um elemento marcado ganha foco e, com Enter, vai inteiro para o contexto do chat. */
 function makeItemKeyboardReachable(element: HTMLElement, id: string): void {
   element.tabIndex = 0;
@@ -171,12 +314,14 @@ function makeItemKeyboardReachable(element: HTMLElement, id: string): void {
 
 /** Só redesenha quando o que está na tela mudou (preserva seleção; a rolagem vive em #scroll). */
 function render(): void {
-  const key = JSON.stringify(view);
+  const key = view.kind === "canvas" && Object.keys(view.embeds).length ? `${JSON.stringify(view)}${themeSignature()}` : JSON.stringify(view);
   if (key === lastRendered) return;
   lastRendered = key;
 
   const head: HTMLElement[] = [];
   const body: HTMLElement[] = [];
+  const hadFilterFocus = filterBar.contains(document.activeElement);
+  embedFrames.clear();
 
   switch (view.kind) {
     case "no-session":
@@ -202,15 +347,18 @@ function render(): void {
       head.push(header);
       if (view.outdatedService) head.push(banner("warning", "O serviço da extensão está desatualizado: pause e retome a extensão em Settings → Extensions."));
       if (view.error) head.push(banner("error", `Última publicação recusada (${formatTime(view.error.at)}): ${view.error.message}. O canvas anterior foi mantido.`));
-      if (view.blocked.length) head.push(banner("warning", `Conteúdo bloqueado e removido: ${view.blocked.join(", ")}.`));
+      if (view.blocked.length) head.push(banner("warning", `Avisos do canvas: ${view.blocked.join(", ")}.`));
+      if (syncFilter(view.tree)) head.push(filterBar);
       const content = el("div", "cv");
-      content.append(buildNodes(view.tree, document, makeItemKeyboardReachable));
+      content.append(buildNodes(view.tree, document, { onItem: makeItemKeyboardReachable, embed: makeEmbed }));
       body.push(content);
       break;
     }
   }
   top.replaceChildren(...head);
   scroll.replaceChildren(...body);
+  if (view.kind === "canvas") applyFilter();
+  if (hadFilterFocus && head.includes(filterBar)) filterInput.focus({ preventScroll: true });
 
   if (view.kind === "canvas") {
     const signature = structureSignature(view.tree);
@@ -264,6 +412,8 @@ function setSession(next: string | null): void {
   inflightFor = null;
   dirty = false;
   hideToolbar();
+  filterState = NO_FILTER;
+  filterInput.value = "";
   view = next ? { kind: "loading" } : { kind: "no-session" };
   viewOwner = next;
   render();

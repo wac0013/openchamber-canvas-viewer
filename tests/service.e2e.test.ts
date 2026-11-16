@@ -122,10 +122,25 @@ describe("serviço (ponta a ponta)", () => {
   });
 
   it("CA8: conteúdo bloqueado é removido e informado; o restante renderiza", async () => {
-    assert.match(await publish("ses_c", '<p>ok</p><script>fetch("http://evil")</script><img src="http://evil/x">', "c"), /Removido por segurança/);
+    assert.match(await publish("ses_c", '<p>ok</p><script>fetch("http://evil")</script><img src="http://evil/x">', "c"), /Avisos/);
     const { json } = await waitFor(() => call("GET", "/canvas?sessionId=ses_c"), (r) => r.json.canvas !== null, 2000);
     assert.deepEqual(json.canvas.blocked.sort(), ["<img>", "<script>"]);
     assert.equal(JSON.stringify(json).includes("evil"), false);
+  });
+
+  it("links e partes incorporadas chegam ao painel pelo caminho completo", async () => {
+    const tools: Array<{ execute: (i: unknown, c: { sessionID: string }) => Promise<{ content: string }> }> = [];
+    await plugin.setup({ tool: { transform: async (edit) => edit({ add: (tool) => tools.push(tool as never) }) } });
+    const html = '<p><a href="https://github.com/org/repo/pull/1" onclick="x()">PR</a> <a href="javascript:alert(1)">ruim</a></p><div data-embed="g" data-height="200">alt</div>';
+    assert.match((await tools[0]!.execute({ html, title: "E", embeds: [{ id: "g", html: "<style>a{}</style><svg></svg><script>1</script>" }] }, { sessionID: "ses_e" })).content, /publicado/);
+    const { json } = await waitFor(() => call("GET", "/canvas?sessionId=ses_e"), (r) => r.json.canvas !== null, 2000);
+    assert.deepEqual(json.canvas.embeds, { g: "<style>a{}</style><svg></svg><script>1</script>" });
+    assert.equal(json.version, 2);
+    const text = JSON.stringify(json.canvas.tree);
+    assert.ok(text.includes("https://github.com/org/repo/pull/1"));
+    assert.equal(text.includes("javascript"), false);
+    assert.equal(text.includes("onclick"), false);
+    await call("POST", "/session-events", sessionDeleted("ses_e"));
   });
 
   it("CA9: session-deleted apaga o canvas só daquela sessão", async () => {

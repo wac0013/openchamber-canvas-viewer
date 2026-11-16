@@ -2,7 +2,7 @@
 // Mudou o formato? Suba SERVICE_VERSION, a versão do package.json e o changelog do README.
 
 /** Versão do contrato do serviço; o painel avisa quando o serviço rodando está desatualizado. */
-export const SERVICE_VERSION = 1;
+export const SERVICE_VERSION = 2;
 
 /** Versão do formato do arquivo da caixa de entrada (plugin → serviço). */
 export const INBOX_SCHEMA_VERSION = 1;
@@ -16,7 +16,23 @@ export const LIMITS = {
   items: 200,
   /** Texto máximo de um item marcável (limite do `host.attach`). */
   itemTextChars: 16_000,
+  /** Tamanho máximo de um link (`href`). */
+  hrefChars: 2048,
+  /** Tamanho máximo do valor de `data-group` (filtro por grupo). */
+  groupChars: 60,
+  /** Quantidade de itens marcáveis a partir da qual o painel oferece o filtro de texto. */
+  filterMinItems: 6,
+  /** Partes incorporadas (HTML completo em iframe isolado): quantidade, tamanho de cada uma e total. */
+  embeds: 8,
+  embedChars: 100_000,
+  embedsTotalChars: 200_000,
+  /** Altura de uma parte incorporada, em px. */
+  embedHeightMin: 60,
+  embedHeightMax: 1200,
 } as const;
+
+/** Tons aceitos em `data-tone` (as cores vêm do tema do OpenChamber). */
+export const TONES = ["neutral", "info", "success", "warning", "error"] as const;
 
 /** Id de sessão aceito em qualquer ponto de entrada (também vira nome de arquivo). */
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -33,8 +49,13 @@ export type CanvasSnapshot = {
   /** Epoch ms da publicação. */
   updatedAt: number;
   tree: CanvasNode[];
-  /** O que o sanitizador removeu (script, link, estilo, handler…); o resto do canvas segue funcional. */
+  /** O que o sanitizador removeu (script, estilo, handler, link inválido…); o resto do canvas segue funcional. */
   blocked: string[];
+  /**
+   * Partes incorporadas por id (HTML completo, com `<style>`/`<script>`): só o painel as desenha, em
+   * iframe `sandbox="allow-scripts"` sem rede. Referenciadas na árvore por `<div data-embed="id">`.
+   */
+  embeds: Record<string, string>;
 };
 
 /** Registro persistido por sessão: só a última versão válida + o último erro. */
@@ -49,7 +70,14 @@ export type CanvasResponse =
   | { ok: false; error: string };
 
 /** Arquivo que o plugin do OpenCode deposita na caixa de entrada (um por sessão, o mais novo vence). */
-export type InboxFile = { v: typeof INBOX_SCHEMA_VERSION; sessionId: string; title: string; html: string };
+export type InboxFile = {
+  v: typeof INBOX_SCHEMA_VERSION;
+  sessionId: string;
+  title: string;
+  html: string;
+  /** Opcional: ausente em arquivos de versões anteriores do plugin. */
+  embeds?: Array<{ id: string; html: string }>;
+};
 
 /** Máximo de avisos de bloqueio guardados por canvas. */
 export const BLOCKED_NOTES_MAX = 20;

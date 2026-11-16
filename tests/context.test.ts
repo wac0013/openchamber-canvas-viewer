@@ -204,3 +204,49 @@ describe("buildChip — trecho selecionado", () => {
     assert.ok(text.indexOf(DATA_NOTICE) < text.indexOf("Elemento: forjado"));
   });
 });
+
+describe("links no contexto", () => {
+  it("plainText acrescenta a URL depois do texto do link, sem repetir quando o texto já é a URL", () => {
+    assert.equal(plainText(tree('<p>Veja <a href="https://github.com/org/repo/pull/1">PR 1</a> e <a href="https://x.com/">https://x.com/</a></p>')), "Veja PR 1 (https://github.com/org/repo/pull/1) e https://x.com/");
+  });
+
+  it("link bloqueado vira só texto no contexto", () => {
+    assert.equal(plainText(tree('<p><a href="javascript:alert(1)">clique</a></p>')), "clique");
+  });
+
+  it("chip de trecho lista os links do trecho (validados, sem repetição, só texto)", () => {
+    const c = canvas("<p>x</p>");
+    const built = buildChip(c, {
+      kind: "selection",
+      text: "PR 1 e PR 2",
+      links: [
+        { text: "PR 1", url: "https://github.com/org/repo/pull/1" },
+        { text: "PR 1 de novo", url: "https://github.com/org/repo/pull/1" },
+        { text: "ruim", url: "javascript:alert(1)" },
+        { text: "https://x.com/", url: "https://x.com/" },
+      ],
+    });
+    assert.ok(built);
+    const lines = (built.chip.text ?? "").split("\n");
+    const at = lines.indexOf("Links no trecho:");
+    assert.ok(at > 0);
+    assert.deepEqual(lines.slice(at + 1), ["- PR 1: https://github.com/org/repo/pull/1", "- https://x.com/"]);
+    assert.equal((built.chip.text ?? "").includes("alert"), false);
+  });
+
+  it("sem links o chip de trecho é exatamente o de antes", () => {
+    const built = buildChip(canvas("<p>x</p>"), { kind: "selection", text: "x", links: [] });
+    assert.equal((built?.chip.text ?? "").includes("Links no trecho:"), false);
+  });
+
+  it("a lista de links muda o id do chip (outro trecho com outros links)", () => {
+    const c = canvas("<p>x</p>");
+    const a = buildChip(c, { kind: "selection", text: "x", links: [{ text: "a", url: "https://a.com/" }] })?.chip.id;
+    const b = buildChip(c, { kind: "selection", text: "x", links: [{ text: "b", url: "https://b.com/" }] })?.chip.id;
+    assert.notEqual(a, b);
+  });
+
+  it("o texto de reserva de uma parte incorporada vai para o contexto", () => {
+    assert.equal(plainText(tree('<div data-embed="g" data-height="200">Falhas: 5, 4, 3.</div>')), "Falhas: 5, 4, 3.");
+  });
+});
