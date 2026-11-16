@@ -61,5 +61,6 @@ Fluxo: agente → `canvas_publish` (plugin) → arquivo na caixa de entrada → 
 
 ## Convenções
 
+- Releases: automáticos (`.github/workflows/release.yml`) quando a versão do `package.json` muda na `main`; não crie tag nem release à mão. Subiu a versão → escreva a seção `### <versão>` no changelog do `README.md` (vira o texto do release; sem ela o workflow falha).
 - Commits: Conventional Commits; branches `feat|fix|chore|docs|test|refactor/<TAREFA>-<descricao>`; base `main`.
 - Nada do fluxo interno (agentes, `.ia/`, handoffs) em código, commit ou PR.

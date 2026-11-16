@@ -1,0 +1,98 @@
+name: Release
+
+# Regra: a versão do package.json é a fonte da verdade. Quando ela muda na main e a tag
+# v<versão> ainda não existe, este workflow valida, cria a tag e publica o release do GitHub
+# com as notas tiradas do changelog do README. Não é preciso criar tag nem release à mão.
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the release already exists
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG já existe; nada a fazer."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.exists.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "npm"
+
+      - name: Install, verify and build
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          git diff --exit-code panel/main.js service/main.js plugin/index.js
+
+      - name: Extract release notes from the README changelog
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 == "### " v { found = 1; next }
+            found && /^##/ { exit }
+            found { print }
+          ' README.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::README.md não tem a seção '### ${VERSION}' no Changelog. Adicione as notas desta versão antes de publicar."
+            exit 1
+          fi
+
+      - name: Package the extension
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # O instalador do OpenChamber usa só os arquivos já construídos.
+          zip -r "openchamber-canvas-viewer-${VERSION}.zip" package.json README.md LICENSE panel plugin service skills -x "*.ts"
+
+      - name: Create tag and GitHub release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$TAG" "openchamber-canvas-viewer-${VERSION}.zip" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file release-notes.md

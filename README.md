@@ -1,6 +1,7 @@
 # Canvas Viewer for OpenChamber
 
 [![CI](https://github.com/wac0013/openchamber-canvas-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/wac0013/openchamber-canvas-viewer/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/wac0013/openchamber-canvas-viewer?display_name=tag&sort=semver)](https://github.com/wac0013/openchamber-canvas-viewer/releases/latest)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Painel lateral do [OpenChamber](https://github.com/openchamber/openchamber) que mostra um **Canvas por sessão de chat**, criado e atualizado pelo próprio agente em tempo real. O usuário acompanha a visualização sem pedi-la de novo nem procurá-la no histórico.
@@ -122,6 +123,16 @@ npm test
 ```
 
 Node 24+. Veja [AGENTS.md](AGENTS.md) para as regras do projeto (TypeScript estrito; os `.js` são artefatos de build).
+
+### Releases
+
+O release do GitHub é **automático** (`.github/workflows/release.yml`). A versão do `package.json` é a fonte da verdade:
+
+1. No PR que muda o comportamento, suba a versão em `package.json` (semver) e escreva a seção `### <versão>` no **Changelog** deste README. As notas do release saem dessa seção; sem ela o workflow falha.
+2. Ao mesclar na `main`, se a tag `v<versão>` ainda não existe, o workflow roda typecheck, testes e build, confere que os bundles commitados batem com a fonte, cria a tag e publica o release com um `.zip` da extensão (só arquivos já construídos: `panel/`, `plugin/`, `service/`, `skills/`, `package.json`, `README.md`, `LICENSE`).
+3. Se a versão não mudou, nada é publicado. Para publicar um release que ficou para trás, rode o workflow **Release** manualmente (*Actions → Release → Run workflow*); uma tag que já existe nunca é recriada.
+
+A badge de release no topo mostra a última versão publicada.
 
 ### Limitações conhecidas
 
