@@ -39,4 +39,4 @@ jobs:
         run: npm run build
 
       - name: Verify committed bundles match source
-        run: git diff --exit-code panel/main.js service/main.js plugin/index.js
+        run: git diff --exit-code panel/main.js service/main.js plugin/index.js server/main.js

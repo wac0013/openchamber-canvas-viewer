@@ -1,52 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildChip, DATA_NOTICE, findItem, itemIds, normalizeSelection, plainText, SELECTION_LINE, truncateContext } from "../src/canvas/context.ts";
-import { parseCanvasHtml } from "../src/canvas/sanitize.ts";
+import { canvasOf as canvas } from "./canvas-fixture.ts";
+import { buildChip, DATA_NOTICE, normalizeSelection, SELECTION_LINE, truncateContext } from "../src/canvas/context.ts";
 import { CHIP_PROVIDER_ID, LIMITS, TRUNCATED_NOTICE } from "../src/shared/contract.ts";
-
-function tree(html: string) {
-  const parsed = parseCanvasHtml(html);
-  if (!parsed.ok) throw new Error(parsed.message);
-  return parsed.tree;
-}
-
-const canvas = (html: string, title = "Meu painel") => ({ title, updatedAt: Date.UTC(2026, 10, 15, 12, 0, 0), tree: tree(html) });
-
-describe("plainText", () => {
-  it("blocos em linhas, listas com '- ' e marcador [#id] nos itens", () => {
-    const text = plainText(tree('<h1>Título</h1><p data-canvas-item="p-1">um <b>dois</b></p><ul><li>a</li><li>b</li></ul>'));
-    assert.equal(text, "Título\n[#p-1] um dois\n- a\n- b");
-  });
-
-  it("tabelas: células separadas por ' | ' e uma linha por <tr>", () => {
-    const text = plainText(tree("<table><tr><th>Nome</th><th>Valor</th></tr><tr><td>x</td><td>42</td></tr></table>"));
-    assert.equal(text, "Nome | Valor\nx | 42");
-  });
-
-  it("<pre> preserva quebras e espaços; fora dele o espaço em branco é colapsado", () => {
-    assert.equal(plainText(tree("<pre>a\n  b</pre>")), "a\n  b");
-    assert.equal(plainText(tree("<p>a\n\n   b</p>")), "a b");
-  });
-
-  it("marcação do agente aparece como texto literal, nunca como tag (CA8)", () => {
-    const text = plainText(tree("<p>&lt;img src=x onerror=alert(1)&gt; &lt;script&gt;x&lt;/script&gt;</p>"));
-    assert.equal(text, "<img src=x onerror=alert(1)> <script>x</script>");
-  });
-
-  it("não contém tags de elementos bloqueados nem seu conteúdo", () => {
-    assert.equal(plainText(tree("<p>ok</p><script>segredo()</script>")), "ok");
-  });
-});
-
-describe("findItem / itemIds", () => {
-  const c = canvas('<div data-canvas-item="a"><p data-canvas-item="b">x</p></div><p>sem marca</p>');
-  it("lista os ids na ordem do documento e acha elementos aninhados", () => {
-    assert.deepEqual(itemIds(c.tree), ["a", "b"]);
-    assert.equal(findItem(c.tree, "b")?.tag, "p");
-    assert.equal(findItem(c.tree, "nao-existe"), null);
-  });
-});
 
 describe("truncateContext (CA6)", () => {
   it("não corta no limite exato", () => {
@@ -206,14 +163,6 @@ describe("buildChip — trecho selecionado", () => {
 });
 
 describe("links no contexto", () => {
-  it("plainText acrescenta a URL depois do texto do link, sem repetir quando o texto já é a URL", () => {
-    assert.equal(plainText(tree('<p>Veja <a href="https://github.com/org/repo/pull/1">PR 1</a> e <a href="https://x.com/">https://x.com/</a></p>')), "Veja PR 1 (https://github.com/org/repo/pull/1) e https://x.com/");
-  });
-
-  it("link bloqueado vira só texto no contexto", () => {
-    assert.equal(plainText(tree('<p><a href="javascript:alert(1)">clique</a></p>')), "clique");
-  });
-
   it("chip de trecho lista os links do trecho (validados, sem repetição, só texto)", () => {
     const c = canvas("<p>x</p>");
     const built = buildChip(c, {
@@ -244,9 +193,5 @@ describe("links no contexto", () => {
     const a = buildChip(c, { kind: "selection", text: "x", links: [{ text: "a", url: "https://a.com/" }] })?.chip.id;
     const b = buildChip(c, { kind: "selection", text: "x", links: [{ text: "b", url: "https://b.com/" }] })?.chip.id;
     assert.notEqual(a, b);
-  });
-
-  it("o texto de reserva de uma parte incorporada vai para o contexto", () => {
-    assert.equal(plainText(tree('<div data-embed="g" data-height="200">Falhas: 5, 4, 3.</div>')), "Falhas: 5, 4, 3.");
   });
 });

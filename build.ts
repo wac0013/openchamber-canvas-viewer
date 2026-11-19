@@ -1,6 +1,7 @@
 import { build } from "esbuild";
 
-// Três artefatos:
+// Quatro artefatos:
+// - server/main.js  → servidor único (ESM, Node; sobe sozinho a partir do serviço);
 // - panel/main.js   → bundle IIFE (o painel roda num iframe sandboxado);
 // - service/main.js → bundle ESM (o host roda em Node com ELECTRON_RUN_AS_NODE); embute o SDK
 //   para a extensão não depender de node_modules no destino;
@@ -33,5 +34,15 @@ await build({
   platform: "node",
   target: "node22",
   outfile: "plugin/index.js",
+  logLevel: "info",
+});
+
+await build({
+  entryPoints: ["server/main.ts"],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  outfile: "server/main.js",
   logLevel: "info",
 });

@@ -1,6 +1,7 @@
 // service/main.ts
 import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
+import { fileURLToPath } from "node:url";
 
 // node_modules/@openchamber/sdk/dist/scrollbar-style.js
 var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
@@ -267,636 +268,154 @@ var SURFACE_CONTROLLERS = ["none", "agent", "user"];
 var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
 
 // src/shared/contract.ts
-var SERVICE_VERSION = 3;
-var INBOX_SCHEMA_VERSION = 1;
-var LIMITS = {
-  /** Tamanho máximo do HTML publicado pelo agente. */
-  htmlChars: 2e5,
-  titleChars: 120,
-  depth: 32,
-  nodes: 5e3,
-  items: 200,
-  /** Texto máximo de um item marcável (limite do `host.attach`). */
-  itemTextChars: 16e3,
-  /** Tamanho máximo de um link (`href`). */
-  hrefChars: 2048,
-  /** Tamanho máximo do valor de `data-group` (filtro por grupo). */
-  groupChars: 60,
-  /** Quantidade de itens marcáveis a partir da qual o painel oferece o filtro de texto. */
-  filterMinItems: 6,
-  /** Partes incorporadas (HTML completo em iframe isolado): quantidade, tamanho de cada uma e total. */
-  embeds: 8,
-  embedChars: 1e5,
-  embedsTotalChars: 2e5,
-  /** Altura de uma parte incorporada, em px. */
-  embedHeightMin: 60,
-  embedHeightMax: 1200
-};
-var TONES = ["neutral", "info", "success", "warning", "error"];
+var SERVICE_VERSION = 4;
+var SERVER_PORT = 57130;
 var SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-var BLOCKED_NOTES_MAX = 20;
 var UPDATE_REQUEST_MARKER = "[Painel Canvas \xB7 Atualizar]";
 var UPDATE_REQUEST_TEXT = `${UPDATE_REQUEST_MARKER} Atualize agora o canvas desta conversa: publique de novo com canvas_publish, refletindo o estado atual do trabalho e mantendo os mesmos ids de elemento. N\xE3o repita a visualiza\xE7\xE3o no chat; responda s\xF3 com um resumo curto do que mudou.`;
 var UPDATE_MIN_INTERVAL_MS = 5e3;
 
-// service/inbox.ts
-import { randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-import path from "node:path";
-var FILE_NAME = /^([A-Za-z0-9_-]{1,128})\.json$/;
-var CLAIMED_NAME = /^([A-Za-z0-9_-]{1,128})\.json\.[0-9a-f-]{36}\.proc$/;
-var MAX_FILE_BYTES = (LIMITS.htmlChars + LIMITS.embedsTotalChars) * 6 + 8192;
-var STALE_CLAIM_MS = 6e4;
-var MAX_ATTEMPTS = 5;
-var attempts = /* @__PURE__ */ new Map();
-async function readPayload(file, sessionId) {
-  const info = await lstat(file);
-  if (!info.isFile()) return { ok: false, message: "a publica\xE7\xE3o n\xE3o \xE9 um arquivo comum" };
-  if (info.size > MAX_FILE_BYTES) return { ok: false, message: `publica\xE7\xE3o maior que o limite (${LIMITS.htmlChars} caracteres de HTML)` };
-  let payload;
-  try {
-    payload = JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    return { ok: false, message: "a publica\xE7\xE3o n\xE3o \xE9 um JSON v\xE1lido" };
-  }
-  if (typeof payload !== "object" || payload === null) return { ok: false, message: "a publica\xE7\xE3o n\xE3o \xE9 um objeto" };
-  if (payload.v !== INBOX_SCHEMA_VERSION) return { ok: false, message: "vers\xE3o de publica\xE7\xE3o n\xE3o suportada" };
-  if (payload.sessionId !== sessionId) return { ok: false, message: "a publica\xE7\xE3o n\xE3o pertence a esta sess\xE3o" };
-  return { ok: true, title: payload.title, html: payload.html, embeds: payload.embeds };
-}
-async function drainInbox(inbox2, store2, now, options = {}) {
-  await mkdir(inbox2, { recursive: true });
-  const changed = [];
-  for (const name of await readdir(inbox2)) {
-    const claimedMatch = CLAIMED_NAME.exec(name);
-    if (claimedMatch) {
-      await dropStaleClaim(path.join(inbox2, name), now());
-      continue;
-    }
-    const match = FILE_NAME.exec(name);
-    if (!match) continue;
-    const sessionId = match[1];
-    const file = path.join(inbox2, name);
-    const claimed = `${file}.${randomUUID()}.proc`;
-    const generation = store2.generation(sessionId);
-    try {
-      await rename(file, claimed);
-    } catch {
-      continue;
-    }
-    try {
-      const payload = await readPayload(claimed, sessionId);
-      const record = payload.ok ? await store2.publish(sessionId, payload.title, payload.html, now(), { expectedGeneration: generation }, payload.embeds) : await store2.reject(sessionId, payload.message, now(), { expectedGeneration: generation });
-      if (record) changed.push(sessionId);
-      attempts.delete(sessionId);
-      await rm(claimed, { force: true, recursive: true });
-    } catch (error) {
-      options.onError?.(sessionId, error);
-      const tried = (attempts.get(sessionId) ?? 0) + 1;
-      if (tried >= MAX_ATTEMPTS) {
-        attempts.delete(sessionId);
-        await rm(claimed, { force: true, recursive: true });
-        await store2.reject(sessionId, "n\xE3o foi poss\xEDvel gravar a publica\xE7\xE3o (erro de disco)", now(), { expectedGeneration: generation }).catch(() => null);
-      } else {
-        attempts.set(sessionId, tried);
-        await giveBack(claimed, file);
-      }
-    }
-  }
-  return changed;
-}
-async function giveBack(claimed, file) {
-  await link(claimed, file).catch(() => void 0);
-  await rm(claimed, { force: true, recursive: true });
-}
-async function dropStaleClaim(claimed, now) {
-  try {
-    const info = await lstat(claimed);
-    if (now - info.mtimeMs > STALE_CLAIM_MS) await rm(claimed, { force: true, recursive: true });
-  } catch {
-    return;
-  }
-}
-async function discardPending(inbox2, sessionId) {
-  if (!SESSION_ID_PATTERN.test(sessionId)) return;
-  await rm(path.join(inbox2, `${sessionId}.json`), { force: true });
-}
+// src/shared/token.ts
+import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 
-// service/paths.ts
+// src/shared/paths.ts
 import os from "node:os";
-import path2 from "node:path";
-function inboxDir(env = process.env) {
-  if (env.OPENCHAMBER_CANVAS_INBOX) return env.OPENCHAMBER_CANVAS_INBOX;
-  const base = env.XDG_CONFIG_HOME || path2.join(os.homedir(), ".config");
-  return path2.join(base, "openchamber", "canvas-viewer", "inbox");
+import path from "node:path";
+function canvasHome(env = process.env) {
+  if (env.OPENCHAMBER_CANVAS_HOME) return env.OPENCHAMBER_CANVAS_HOME;
+  const base = env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+  return path.join(base, "openchamber-canvas");
+}
+function tokenFile(env = process.env) {
+  return path.join(canvasHome(env), "token");
 }
 
-// service/store.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir as mkdir2, readFile as readFile2, rename as rename2, rm as rm2, writeFile } from "node:fs/promises";
-import path3 from "node:path";
-
-// src/canvas/embeds.ts
-var EMBED_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-function isEmbedId(value) {
-  return typeof value === "string" && EMBED_ID.test(value);
+// src/shared/token.ts
+var TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+function isValidToken(value) {
+  return TOKEN_PATTERN.test(value);
 }
-function parseEmbedsInput(value) {
-  if (value === void 0 || value === null) return { ok: true, embeds: {} };
-  if (!Array.isArray(value)) return { ok: false, message: "embeds deve ser uma lista de { id, html }" };
-  if (value.length > LIMITS.embeds) return { ok: false, message: `mais de ${LIMITS.embeds} partes incorporadas` };
-  const embeds = {};
-  let total = 0;
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) return { ok: false, message: "cada embed deve ser { id, html }" };
-    const { id, html } = entry;
-    if (!isEmbedId(id)) return { ok: false, message: "id de embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)" };
-    if (Object.hasOwn(embeds, id)) return { ok: false, message: `embed repetido: ${id}` };
-    if (typeof html !== "string" || html.trim() === "") return { ok: false, message: `o embed ${id} est\xE1 vazio` };
-    if (html.length > LIMITS.embedChars) return { ok: false, message: `o embed ${id} passa de ${LIMITS.embedChars} caracteres` };
-    if (CONTROL_CHARS.test(html)) return { ok: false, message: `caractere de controle no embed ${id}` };
-    total += html.length;
-    if (total > LIMITS.embedsTotalChars) return { ok: false, message: `os embeds passam de ${LIMITS.embedsTotalChars} caracteres no total` };
-    embeds[id] = html;
-  }
-  return { ok: true, embeds };
-}
-function validateEmbeds(value) {
-  if (value === void 0) return {};
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const entries = Object.entries(value).map(([id, html]) => ({ id, html }));
-  const parsed = parseEmbedsInput(entries);
-  return parsed.ok ? parsed.embeds : null;
-}
-
-// src/canvas/sanitize.ts
-var ALLOWED_TAGS = /* @__PURE__ */ new Set([
-  "a",
-  "div",
-  "span",
-  "p",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "ul",
-  "ol",
-  "li",
-  "dl",
-  "dt",
-  "dd",
-  "table",
-  "caption",
-  "thead",
-  "tbody",
-  "tfoot",
-  "tr",
-  "th",
-  "td",
-  "blockquote",
-  "pre",
-  "code",
-  "strong",
-  "b",
-  "em",
-  "i",
-  "u",
-  "s",
-  "mark",
-  "small",
-  "sub",
-  "sup",
-  "kbd",
-  "br",
-  "hr",
-  "section",
-  "article",
-  "header",
-  "footer",
-  "figure",
-  "figcaption",
-  "details",
-  "summary"
-]);
-var VOID_TAGS = /* @__PURE__ */ new Set(["br", "hr"]);
-var DROP_WITH_CONTENT = /* @__PURE__ */ new Set([
-  "script",
-  "style",
-  "svg",
-  "math",
-  "iframe",
-  "object",
-  "textarea",
-  "noscript",
-  "template",
-  "title",
-  "head",
-  "select"
-]);
-var DROP_VOID = /* @__PURE__ */ new Set(["img", "input", "meta", "link", "base", "source", "track", "area", "embed", "param", "wbr"]);
-var CLASS_TOKEN = /^[a-z][a-z0-9-]{0,31}$/;
-var ITEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-var NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\xA0" };
-var CONTROL_CHARS2 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/;
-var BIDI_CHARS_ALL = /[\u202a-\u202e\u2066-\u2069]/g;
-var TONE_SET = new Set(TONES);
-var DATA_VALUE = /^(?:100(?:\.0{1,2})?|[0-9]{1,2}(?:\.[0-9]{1,2})?)$/;
-var DATA_HEIGHT = /^[0-9]{2,4}$/;
-var HREF_FORBIDDEN = /[\s\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
-var Malformed = class extends Error {
-};
-function cleanHref(raw) {
-  const value = raw.trim();
-  if (value === "" || value.length > LIMITS.hrefChars || HREF_FORBIDDEN.test(value)) return null;
-  let url;
+async function readToken(env = process.env) {
   try {
-    url = new URL(value);
+    const value = (await readFile(tokenFile(env), "utf8")).trim();
+    return isValidToken(value) ? value : null;
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  if (url.username !== "" || url.password !== "" || url.hostname === "") return null;
-  return url.href.length <= LIMITS.hrefChars ? url.href : null;
 }
-var SIMPLE_ATTRIBUTES = /* @__PURE__ */ new Set(["title", "colspan", "rowspan", "href", "data-tone", "data-value", "data-group", "data-height"]);
-function simpleAttribute(tag, name, value) {
-  switch (name) {
-    case "title":
-      return value.slice(0, 200);
-    case "colspan":
-    case "rowspan":
-      return /^[1-9][0-9]?$/.test(value) ? value : null;
-    case "href":
-      return tag === "a" ? cleanHref(value) : null;
-    case "data-tone":
-      return TONE_SET.has(value) ? value : null;
-    case "data-value":
-      return DATA_VALUE.test(value) ? value : null;
-    case "data-group": {
-      if (BIDI_CHARS.test(value)) return null;
-      const group = value.slice(0, LIMITS.groupChars).trim();
-      return group === "" ? null : group;
+
+// service/bridge.ts
+function parseSse(buffer) {
+  const events = [];
+  const cut = buffer.lastIndexOf("\n\n");
+  if (cut < 0) return { events, rest: buffer };
+  for (const frame of buffer.slice(0, cut).split("\n\n")) {
+    if (!frame.startsWith("data: ")) continue;
+    try {
+      const data = JSON.parse(frame.slice(6));
+      if (!data || typeof data !== "object") continue;
+      const { rootId, updatedAt } = data;
+      if (typeof rootId === "string" && SESSION_ID_PATTERN.test(rootId) && typeof updatedAt === "number") events.push({ rootId, updatedAt });
+    } catch {
     }
-    case "data-height":
-      return DATA_HEIGHT.test(value) && Number(value) >= LIMITS.embedHeightMin && Number(value) <= LIMITS.embedHeightMax ? value : null;
-    default:
-      return null;
   }
+  return { events, rest: buffer.slice(cut + 2) };
 }
-function blockedNote(tag, name) {
-  if (name === "href") return tag === "a" ? "link inv\xE1lido (use http:// ou https://)" : "atributo href";
-  return `atributo ${name} inv\xE1lido`;
-}
-function decodeEntities(raw) {
-  return raw.replace(/&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g, (whole, body) => {
-    if (body.startsWith("#")) {
-      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      const ok = Number.isInteger(code) && (code === 9 || code === 10 || code === 13 || code >= 32 && code <= 1114111 && code !== 127 && !(code >= 55296 && code <= 57343));
-      return ok ? String.fromCodePoint(code) : "\uFFFD";
-    }
-    return Object.hasOwn(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body] : whole;
-  });
-}
-function position(html, index) {
-  const before = html.slice(0, index);
-  return `linha ${before.split("\n").length}, coluna ${index - before.lastIndexOf("\n")}`;
-}
-var TAG_OPEN = /^<([a-zA-Z][a-zA-Z0-9:-]*)((?:\s+[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*(\/?)>/;
-var TAG_CLOSE = /^<\/([a-zA-Z][a-zA-Z0-9:-]*)\s*>/;
-var ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
-function parseOrThrow(html, blocked) {
-  if (html.length > LIMITS.htmlChars) throw new Malformed(`HTML maior que ${LIMITS.htmlChars} caracteres`);
-  const root = [];
-  const stack = [];
-  const seenItems = /* @__PURE__ */ new Set();
-  const seenEmbeds = /* @__PURE__ */ new Set();
-  let nodes = 0;
-  let index = 0;
-  const block = (what) => {
-    if (blocked.size < BLOCKED_NOTES_MAX) blocked.add(what);
-  };
-  const children = () => stack.length ? stack[stack.length - 1].c : root;
-  const count = () => {
-    if (++nodes > LIMITS.nodes) throw new Malformed(`mais de ${LIMITS.nodes} n\xF3s`);
-  };
-  const pushText = (raw) => {
-    if (!raw) return;
-    let value = decodeEntities(raw);
-    if (CONTROL_CHARS2.test(value)) throw new Malformed("caractere de controle no texto");
-    if (BIDI_CHARS.test(value)) {
-      block("controle bidirecional");
-      value = value.replace(BIDI_CHARS_ALL, "");
-    }
-    count();
-    children().push({ t: "text", v: value });
-  };
-  const readAttributes = (raw, tag) => {
-    const attrs = {};
-    for (const match of raw.matchAll(ATTRIBUTE)) {
-      const name = (match[1] ?? "").toLowerCase();
-      const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? "");
-      if (CONTROL_CHARS2.test(value)) throw new Malformed(`caractere inv\xE1lido no atributo "${name}"`);
-      switch (name) {
-        case "class": {
-          const tokens = value.split(/\s+/).filter(Boolean);
-          const valid = tokens.filter((token) => CLASS_TOKEN.test(token)).slice(0, 8);
-          if (valid.length !== tokens.length) block("classe inv\xE1lida (use [a-z][a-z0-9-], at\xE9 8)");
-          if (valid.length) attrs.class = valid.join(" ");
-          break;
+var BACKOFF_MIN_MS = 500;
+var BACKOFF_MAX_MS = 1e4;
+function startBridge(options) {
+  const doFetch = options.fetchImpl ?? fetch;
+  const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const controller = new AbortController();
+  const run = async () => {
+    let delay = BACKOFF_MIN_MS;
+    while (!controller.signal.aborted) {
+      try {
+        await options.beforeConnect?.();
+        const token = await options.token();
+        if (!token) throw new Error("sem token");
+        const response = await doFetch(options.url, { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
+        if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+        delay = BACKOFF_MIN_MS;
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for await (const chunk of response.body) {
+          buffer += decoder.decode(chunk, { stream: true });
+          const parsed = parseSse(buffer);
+          buffer = parsed.rest;
+          for (const event of parsed.events) options.onEvent(event);
         }
-        case "data-canvas-item":
-          if (!ITEM_ID.test(value)) throw new Malformed("data-canvas-item inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)");
-          if (seenItems.has(value)) throw new Malformed(`data-canvas-item repetido: ${value}`);
-          if (seenItems.size >= LIMITS.items) throw new Malformed(`mais de ${LIMITS.items} itens marc\xE1veis`);
-          seenItems.add(value);
-          attrs["data-canvas-item"] = value;
-          break;
-        case "data-embed":
-          if (tag !== "div") {
-            block("data-embed fora de <div>");
-            break;
-          }
-          if (!ITEM_ID.test(value)) throw new Malformed("data-embed inv\xE1lido (use [a-z0-9][a-z0-9-], at\xE9 40)");
-          if (seenEmbeds.has(value)) throw new Malformed(`data-embed repetido: ${value}`);
-          if (seenEmbeds.size >= LIMITS.embeds) throw new Malformed(`mais de ${LIMITS.embeds} partes incorporadas`);
-          seenEmbeds.add(value);
-          attrs["data-embed"] = value;
-          break;
-        default:
-          if (SIMPLE_ATTRIBUTES.has(name)) {
-            const clean = simpleAttribute(tag, name, value);
-            if (clean === null) block(blockedNote(tag, name));
-            else attrs[name] = clean;
-          } else {
-            block(`atributo ${name.startsWith("on") ? "on*" : name}`);
-          }
+      } catch {
       }
-    }
-    return attrs;
-  };
-  while (index < html.length) {
-    const lt = html.indexOf("<", index);
-    if (lt === -1) {
-      pushText(html.slice(index));
-      break;
-    }
-    pushText(html.slice(index, lt));
-    index = lt;
-    if (html.startsWith("<!--", index)) {
-      const end = html.indexOf("-->", index + 4);
-      if (end === -1) throw new Malformed(`coment\xE1rio n\xE3o fechado (${position(html, index)})`);
-      index = end + 3;
-      continue;
-    }
-    if (html.startsWith("<!", index) || html.startsWith("<?", index)) {
-      const end = html.indexOf(">", index);
-      if (end === -1) throw new Malformed(`declara\xE7\xE3o n\xE3o fechada (${position(html, index)})`);
-      block("declara\xE7\xE3o (<! ou <?)");
-      index = end + 1;
-      continue;
-    }
-    const closing = TAG_CLOSE.exec(html.slice(index, index + 64));
-    if (closing) {
-      const name2 = (closing[1] ?? "").toLowerCase();
-      index += closing[0].length;
-      if (!ALLOWED_TAGS.has(name2)) continue;
-      const top = stack.pop();
-      if (!top || top.tag !== name2) throw new Malformed(`fechamento </${name2}> sem abertura correspondente (${position(html, index)})`);
-      continue;
-    }
-    const opening = TAG_OPEN.exec(html.slice(index, index + 4096));
-    if (!opening) throw new Malformed(`marca\xE7\xE3o malformada (${position(html, index)}); use &lt; para o caractere <`);
-    const name = (opening[1] ?? "").toLowerCase();
-    index += opening[0].length;
-    if (DROP_WITH_CONTENT.has(name)) {
-      block(`<${name}>`);
-      if (opening[3] === "/") continue;
-      const close = new RegExp(`</${name}\\s*>`, "i").exec(html.slice(index));
-      if (!close) throw new Malformed(`<${name}> n\xE3o foi fechada`);
-      index += close.index + close[0].length;
-      continue;
-    }
-    if (DROP_VOID.has(name)) {
-      block(`<${name}>`);
-      continue;
-    }
-    if (!ALLOWED_TAGS.has(name)) {
-      block(`<${name}>`);
-      continue;
-    }
-    if (stack.length + 1 > LIMITS.depth) throw new Malformed(`aninhamento maior que ${LIMITS.depth}`);
-    count();
-    const element = { t: "el", tag: name, attrs: readAttributes(opening[2] ?? "", name), c: [] };
-    children().push(element);
-    if (VOID_TAGS.has(name) || opening[3] === "/") continue;
-    stack.push(element);
-  }
-  const open = stack[stack.length - 1];
-  if (open) throw new Malformed(`tag <${open.tag}> n\xE3o foi fechada`);
-  return root;
-}
-function parseCanvasHtml(html) {
-  if (typeof html !== "string") return { ok: false, message: "html deve ser texto" };
-  const blocked = /* @__PURE__ */ new Set();
-  try {
-    const tree = parseOrThrow(html, blocked);
-    return { ok: true, tree, blocked: [...blocked] };
-  } catch (error) {
-    if (error instanceof Malformed) return { ok: false, message: error.message };
-    return { ok: false, message: "falha ao ler o HTML" };
-  }
-}
-function validateTree(value) {
-  let nodes = 0;
-  let items = 0;
-  const seen = /* @__PURE__ */ new Set();
-  const embeds = /* @__PURE__ */ new Set();
-  const walk = (raw, depth) => {
-    if (++nodes > LIMITS.nodes || typeof raw !== "object" || raw === null) return null;
-    const node = raw;
-    if (node.t === "text") {
-      return typeof node.v === "string" && node.v.length <= LIMITS.htmlChars && !CONTROL_CHARS2.test(node.v) && !BIDI_CHARS.test(node.v) ? { t: "text", v: node.v } : null;
-    }
-    if (depth > LIMITS.depth) return null;
-    if (node.t !== "el" || typeof node.tag !== "string" || !ALLOWED_TAGS.has(node.tag)) return null;
-    if (typeof node.attrs !== "object" || node.attrs === null || !Array.isArray(node.c)) return null;
-    const attrs = {};
-    for (const [name, attr] of Object.entries(node.attrs)) {
-      if (typeof attr !== "string") return null;
-      if (name === "class") {
-        const tokens = attr.split(/\s+/).filter(Boolean);
-        if (tokens.length > 8 || !tokens.every((token) => CLASS_TOKEN.test(token))) return null;
-        attrs.class = tokens.join(" ");
-      } else if (name === "data-canvas-item") {
-        if (!ITEM_ID.test(attr) || seen.has(attr) || ++items > LIMITS.items) return null;
-        seen.add(attr);
-        attrs[name] = attr;
-      } else if (name === "data-embed") {
-        if (node.tag !== "div" || !ITEM_ID.test(attr) || embeds.has(attr) || embeds.size >= LIMITS.embeds) return null;
-        embeds.add(attr);
-        attrs[name] = attr;
-      } else if (SIMPLE_ATTRIBUTES.has(name)) {
-        if (simpleAttribute(node.tag, name, attr) !== attr) return null;
-        attrs[name] = attr;
-      } else {
-        return null;
-      }
-    }
-    if (VOID_TAGS.has(node.tag) && node.c.length > 0) return null;
-    const c = [];
-    for (const child of node.c) {
-      const clean = walk(child, depth + 1);
-      if (!clean) return null;
-      c.push(clean);
-    }
-    return { t: "el", tag: node.tag, attrs, c };
-  };
-  if (!Array.isArray(value)) return null;
-  const tree = [];
-  for (const child of value) {
-    const clean = walk(child, 1);
-    if (!clean) return null;
-    tree.push(clean);
-  }
-  return tree;
-}
-function embedIds(nodes) {
-  const ids = [];
-  const walk = (list) => {
-    for (const node of list) {
-      if (node.t !== "el") continue;
-      const id = node.attrs["data-embed"];
-      if (id) ids.push(id);
-      walk(node.c);
+      if (controller.signal.aborted) return;
+      await sleep(delay);
+      delay = Math.min(delay * 2, BACKOFF_MAX_MS);
     }
   };
-  walk(nodes);
-  return ids;
+  void run();
+  return { stop: () => controller.abort() };
 }
 
-// src/canvas/snapshot.ts
-var TITLE_STRIP = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g;
-function buildSnapshot(title, html, now, embedsInput) {
-  const cleanTitle = typeof title === "string" ? title.replace(TITLE_STRIP, " ").trim().slice(0, LIMITS.titleChars) : "";
-  const parsed = parseCanvasHtml(html);
-  if (!parsed.ok) return { ok: false, message: parsed.message };
-  const sent = parseEmbedsInput(embedsInput);
-  if (!sent.ok) return { ok: false, message: sent.message };
-  if (parsed.tree.length === 0) return { ok: false, message: "o canvas est\xE1 vazio" };
-  const tree = validateTree(parsed.tree);
-  if (!tree) return { ok: false, message: "o canvas excede os limites de estrutura" };
-  const used = new Set(embedIds(tree));
-  const embeds = {};
-  const blocked = [...parsed.blocked];
-  for (const [id, body] of Object.entries(sent.embeds)) {
-    if (used.has(id)) embeds[id] = body;
-    else blocked.push(`embed sem uso: ${id}`);
+// service/ensure-server.ts
+import { spawn } from "node:child_process";
+var WAIT_STEP_MS = 50;
+var WAIT_STEPS = 100;
+async function waitFor(deps2, done) {
+  for (let i = 0; i < WAIT_STEPS; i += 1) {
+    if (done(await deps2.health())) return true;
+    await deps2.sleep(WAIT_STEP_MS);
   }
-  for (const id of used) if (!Object.hasOwn(embeds, id)) blocked.push(`data-embed sem conte\xFAdo: ${id}`);
-  return { ok: true, snapshot: { title: cleanTitle, updatedAt: now, tree, blocked: blocked.slice(0, BLOCKED_NOTES_MAX), embeds } };
+  return false;
 }
-
-// service/store.ts
-function createStore(dataDir) {
-  const dir = path3.join(dataDir, "canvases");
-  const generations = /* @__PURE__ */ new Map();
-  const queues = /* @__PURE__ */ new Map();
-  const fileOf = (sessionId) => {
-    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("id de sess\xE3o inv\xE1lido");
-    return path3.join(dir, `${sessionId}.json`);
-  };
-  const generation = (sessionId) => generations.get(sessionId) ?? 0;
-  const locked = (sessionId, task) => {
-    const previous = queues.get(sessionId) ?? Promise.resolve();
-    const run = previous.then(task, task);
-    const tail = run.catch(() => void 0);
-    queues.set(sessionId, tail);
-    void tail.then(() => {
-      if (queues.get(sessionId) === tail) queues.delete(sessionId);
-    });
-    return run;
-  };
-  const readFileRecord = async (sessionId) => {
-    const file = fileOf(sessionId);
-    let raw;
-    try {
-      raw = await readFile2(file, "utf8");
-    } catch {
-      return null;
-    }
-    try {
-      const value = JSON.parse(raw);
-      const canvas = value.canvas;
-      if (canvas) {
-        const tree = validateTree(canvas.tree);
-        if (!tree || typeof canvas.updatedAt !== "number" || typeof canvas.title !== "string") return null;
-        const blocked = Array.isArray(canvas.blocked) ? canvas.blocked.filter((note) => typeof note === "string").slice(0, BLOCKED_NOTES_MAX) : [];
-        const embeds = validateEmbeds(canvas.embeds);
-        if (!embeds) return null;
-        return { sessionId, canvas: { title: canvas.title, updatedAt: canvas.updatedAt, tree, blocked, embeds }, error: readError(value.error) };
-      }
-      return { sessionId, canvas: null, error: readError(value.error) };
-    } catch {
-      return null;
-    }
-  };
-  const write = async (record) => {
-    await mkdir2(dir, { recursive: true });
-    const target = fileOf(record.sessionId);
-    const tmp = `${target}.${randomUUID2()}.tmp`;
-    try {
-      await writeFile(tmp, JSON.stringify(record), "utf8");
-      await rename2(tmp, target);
-    } catch (error) {
-      await rm2(tmp, { force: true });
-      throw error;
-    }
-  };
-  const outdated = (sessionId, options) => options?.expectedGeneration !== void 0 && options.expectedGeneration !== generation(sessionId);
+async function ensureServer(deps2, version) {
+  const current = await deps2.health();
+  if (current && current.version >= version) return "reused";
+  if (current) {
+    await deps2.shutdownBelow(version);
+    if (!await waitFor(deps2, (h) => h === null || h.version >= version)) throw new Error("servidor antigo n\xE3o encerrou");
+    const now = await deps2.health();
+    if (now && now.version >= version) return "replaced";
+  }
+  deps2.spawnServer();
+  if (!await waitFor(deps2, (h) => h !== null && h.version >= version)) throw new Error("servidor n\xE3o subiu");
+  return current ? "replaced" : "started";
+}
+function baseUrl(port) {
+  return `http://127.0.0.1:${port}`;
+}
+function realDeps(options) {
+  const port = options.port ?? SERVER_PORT;
+  const doFetch = options.fetchImpl ?? fetch;
+  const env = options.env ?? process.env;
   return {
-    generation,
-    read: async (sessionId) => {
-      fileOf(sessionId);
-      return locked(sessionId, () => readFileRecord(sessionId));
+    async health() {
+      try {
+        const response = await doFetch(`${baseUrl(port)}/health`, { signal: AbortSignal.timeout(1e3) });
+        const body = await response.json();
+        if (response.ok && body && typeof body === "object" && body.ok === true && typeof body.version === "number") {
+          return body;
+        }
+      } catch {
+      }
+      return null;
     },
-    remove: async (sessionId) => {
-      fileOf(sessionId);
-      return locked(sessionId, async () => {
-        generations.set(sessionId, generation(sessionId) + 1);
-        await rm2(fileOf(sessionId), { force: true });
+    async shutdownBelow(version) {
+      const token = await options.token();
+      if (!token) return;
+      await doFetch(`${baseUrl(port)}/shutdown?below=${version}`, { method: "POST", headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2e3) }).catch(() => {
       });
     },
-    publish: async (sessionId, title, html, now, options, embeds) => {
-      fileOf(sessionId);
-      return locked(sessionId, async () => {
-        if (outdated(sessionId, options)) return null;
-        const built = buildSnapshot(title, html, now, embeds);
-        if (!built.ok) return rejectLocked(sessionId, built.message, now);
-        const record = { sessionId, canvas: built.snapshot, error: null };
-        await write(record);
-        return record;
-      });
+    spawnServer() {
+      const passthrough = ["PATH", "HOME", "XDG_DATA_HOME", "OPENCHAMBER_CANVAS_HOME", "OPENCHAMBER_CANVAS_PORT", "OPENCHAMBER_CANVAS_HOST", "OPENCHAMBER_CANVAS_IDLE_MS"];
+      const childEnv = { ELECTRON_RUN_AS_NODE: "1" };
+      for (const key of passthrough) {
+        const value = env[key];
+        if (value !== void 0) childEnv[key] = value;
+      }
+      spawn(process.execPath, [options.serverScript], { detached: true, stdio: "ignore", env: childEnv }).unref();
     },
-    reject: async (sessionId, message, now, options) => {
-      fileOf(sessionId);
-      return locked(sessionId, async () => outdated(sessionId, options) ? null : rejectLocked(sessionId, message, now));
-    }
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   };
-  async function rejectLocked(sessionId, message, now) {
-    const previous = await readFileRecord(sessionId);
-    const record = { sessionId, canvas: previous?.canvas ?? null, error: { at: now, message: message.slice(0, 300) } };
-    await write(record);
-    return record;
-  }
-}
-function readError(value) {
-  if (typeof value !== "object" || value === null) return null;
-  const error = value;
-  return typeof error.at === "number" && typeof error.message === "string" ? { at: error.at, message: error.message.slice(0, 300) } : null;
 }
 
 // service/update-request.ts
@@ -955,20 +474,31 @@ function createUpdateRequester(host2, now = monotonicNow, minIntervalMs = UPDATE
 // service/main.ts
 var PORT = Number(process.env.OPENCHAMBER_SERVICE_PORT || 0);
 var TOKEN = process.env.OPENCHAMBER_SERVICE_TOKEN || "";
-var DATA_DIR = process.env.OPENCHAMBER_SERVICE_DATA_DIR || "";
-var DRAIN_INTERVAL_MS = 500;
 var BODY_MAX_BYTES = 1e5;
-if (!PORT || !TOKEN || !DATA_DIR) {
-  console.error("[canvas-viewer] vari\xE1veis OPENCHAMBER_SERVICE_PORT/TOKEN/DATA_DIR ausentes");
+var SERVER_PORT_IN_USE = Number(process.env.OPENCHAMBER_CANVAS_PORT || SERVER_PORT);
+var SERVER_URL = `http://127.0.0.1:${SERVER_PORT_IN_USE}`;
+var BROWSER_URL = (process.env.OPENCHAMBER_CANVAS_BROWSER_URL || SERVER_URL).replace(/\/+$/, "");
+if (!PORT || !TOKEN) {
+  console.error("[canvas-viewer] vari\xE1veis OPENCHAMBER_SERVICE_PORT/TOKEN ausentes");
   process.exit(1);
 }
-var store = createStore(DATA_DIR);
-var inbox = inboxDir();
 var host = createServiceHost({ env: process.env });
 var updateRequester = createUpdateRequester({
   status: (sessionId) => host.sessions.status(sessionId),
   send: (sessionId, prompt) => host.sessions.send(sessionId, prompt)
 });
+var deps = realDeps({
+  serverScript: fileURLToPath(new URL("../server/main.js", import.meta.url)),
+  token: () => readToken(),
+  port: SERVER_PORT_IN_USE
+});
+var ensuring = null;
+function ensure() {
+  ensuring ??= ensureServer(deps, SERVICE_VERSION).then(() => void 0).finally(() => {
+    ensuring = null;
+  });
+  return ensuring;
+}
 var UPDATE_STATUS = { "invalid-session": 400, busy: 409, waiting: 409, "too-soon": 429, "not-granted": 403, "host-refused": 502, unconfirmed: 502 };
 function authorized(header) {
   const expected = Buffer.from(`Bearer ${TOKEN}`);
@@ -1006,22 +536,11 @@ function readBody(request) {
     request.on("error", reject);
   });
 }
-var draining = null;
-function drain() {
-  draining ??= (async () => {
-    try {
-      const changed = await drainInbox(inbox, store, () => Date.now(), {
-        onError: (sessionId, error) => console.error("[canvas-viewer] publica\xE7\xE3o adiada:", sessionId, error instanceof Error ? error.message : "erro")
-      });
-      for (const sessionId of changed) void host.emit("canvas", { sessionId }).catch(() => {
-      });
-    } catch (error) {
-      console.error("[canvas-viewer] falha ao ler a caixa de entrada:", error instanceof Error ? error.message : "erro");
-    } finally {
-      draining = null;
-    }
-  })();
-  return draining;
+async function callServer(path2, init = {}) {
+  await ensure();
+  const token = await readToken();
+  if (!token) throw new Error("sem token do servidor");
+  return fetch(`${SERVER_URL}${path2}`, { ...init, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5e3) });
 }
 async function route(request, response) {
   const url = new URL(String(request.url || "/"), "http://127.0.0.1");
@@ -1035,9 +554,24 @@ async function route(request, response) {
       send(response, 400, { ok: false, error: "sessionId inv\xE1lido" });
       return;
     }
-    await drain();
-    const record = await store.read(sessionId);
-    send(response, 200, { ok: true, version: SERVICE_VERSION, canvas: record?.canvas ?? null, error: record?.error ?? null });
+    const upstream = await callServer(`/canvas?session=${encodeURIComponent(sessionId)}`);
+    const body = await upstream.json();
+    send(response, upstream.ok ? 200 : 502, body.ok ? { ...body, version: SERVICE_VERSION } : body);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/info") {
+    const sessionId = url.searchParams.get("sessionId") ?? "";
+    if (!SESSION_ID_PATTERN.test(sessionId)) {
+      send(response, 400, { ok: false, error: "sessionId inv\xE1lido" });
+      return;
+    }
+    await ensure();
+    const token = await readToken();
+    if (!token) {
+      send(response, 502, { ok: false, error: "sem token do servidor" });
+      return;
+    }
+    send(response, 200, { ok: true, url: `${BROWSER_URL}/s/${encodeURIComponent(sessionId)}?t=${token}` });
     return;
   }
   if (request.method === "POST" && url.pathname === "/update-request") {
@@ -1060,8 +594,8 @@ async function route(request, response) {
     }
     const sessionId = event.event.session.id;
     if (event.event.type === "session-deleted" && SESSION_ID_PATTERN.test(sessionId)) {
-      await discardPending(inbox, sessionId);
-      await store.remove(sessionId);
+      await callServer(`/canvas/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {
+      });
     }
     send(response, 200, { ok: true });
     return;
@@ -1084,6 +618,11 @@ var server = http.createServer((request, response) => {
   });
 });
 server.listen(PORT, "127.0.0.1", () => {
-  void drain();
-  setInterval(() => void drain(), DRAIN_INTERVAL_MS);
+  startBridge({
+    url: `${SERVER_URL}/events`,
+    token: () => readToken(),
+    beforeConnect: ensure,
+    onEvent: (event) => void host.emit("canvas", { rootId: event.rootId }).catch(() => {
+    })
+  });
 });

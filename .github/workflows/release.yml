@@ -60,7 +60,7 @@ jobs:
           npm run typecheck
           npm test
           npm run build
-          git diff --exit-code panel/main.js service/main.js plugin/index.js
+          git diff --exit-code panel/main.js service/main.js plugin/index.js server/main.js
 
       - name: Extract release notes from the README changelog
         if: steps.exists.outputs.exists == 'false'
@@ -83,7 +83,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           # O instalador do OpenChamber usa só os arquivos já construídos.
-          zip -r "openchamber-canvas-viewer-${VERSION}.zip" package.json README.md LICENSE panel plugin service skills -x "*.ts"
+          zip -r "openchamber-canvas-viewer-${VERSION}.zip" package.json README.md LICENSE panel plugin server service skills -x "*.ts"
 
       - name: Create tag and GitHub release
         if: steps.exists.outputs.exists == 'false'

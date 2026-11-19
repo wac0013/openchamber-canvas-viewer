@@ -1,16 +1,13 @@
-// Plugin do OpenCode que o OpenChamber carrega junto com a extensão. Registra a ferramenta
-// `canvas_publish`: o agente entrega o HTML do canvas e o plugin — que sabe a sessão exata
-// (context.sessionID) — deposita o arquivo na caixa de entrada que o serviço da extensão lê.
+// Plugin do OpenCode que o OpenChamber carrega junto com a extensão. Registra as ferramentas
+// `canvas_publish` e `canvas_edit`: o agente entrega HTML livre e o plugin — que sabe a sessão exata
+// (context.sessionID) — grava o arquivo da sessão RAIZ (subagentes escrevem no canvas da conversa
+// principal). O servidor único vigia a pasta e o painel atualiza sozinho.
 //
 // O OpenCode importa este arquivo sem node_modules ao lado: o build embute tudo
 // (só módulos "node:*" ficam de fora) e o tipo da API é declarado aqui mesmo.
 
-import { randomUUID } from "node:crypto";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-
-import { buildSnapshot } from "../src/canvas/snapshot.ts";
-import { INBOX_SCHEMA_VERSION, LIMITS, SESSION_ID_PATTERN, type InboxFile } from "../src/shared/contract.ts";
-import { inboxDir, inboxFile } from "../service/paths.ts";
+import { LIMITS, SESSION_ID_PATTERN } from "../src/shared/contract.ts";
+import { editCanvas, findRoot, writeAlias, writeCanvas, type SessionLookup } from "../src/shared/canvas-files.ts";
 
 type ToolResult = { content: string };
 type ToolDefinition = {
@@ -20,72 +17,101 @@ type ToolDefinition = {
   input: { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false };
   execute: (input: unknown, context: { sessionID: string }) => Promise<ToolResult>;
 };
-type PluginContext = { tool: { transform: (edit: (tools: { add: (tool: ToolDefinition) => void }) => void) => Promise<void> } };
+type PluginContext = {
+  tool: { transform: (edit: (tools: { add: (tool: ToolDefinition) => void }) => void) => Promise<void> };
+  session: { get: (input: { sessionID: string }) => Promise<unknown> };
+};
 
-const DESCRIPTION = [
-  "Publica ou atualiza o Canvas desta conversa: um painel lateral do OpenChamber que o usuário vê atualizar em tempo real.",
-  "Cada chamada SUBSTITUI o canvas anterior (só existe um por conversa) — reenvie o HTML completo.",
-  "`html` é um fragmento HTML estático. Tags permitidas: a, div, span, p, h1-h6, ul/ol/li, dl/dt/dd, table/thead/tbody/tr/th/td, blockquote, pre, code, strong/b, em/i, br, hr, section, article, details/summary, figure/figcaption.",
-  "Links: <a href=\"https://…\"> (só http/https, clicáveis; qualquer outro esquema é removido).",
-  "Atributos permitidos: class (nomes [a-z][a-z0-9-]; estilos prontos: card, row, grid, grid-2, grid-3, muted, ok, warn, err, info, badge, mono, small, big, center, right, box, stat, stat-value, stat-label, callout, callout-title, chip, dot, rows, split, side, num, table, bar, chart, chart-row, chart-label, chart-value, stack, seg, columns, col, col-track, col-bar, col-label, flow, flow-col, step, step-title), com o prefixo oc- do render nativo do OpenChamber também valendo; data-tone (neutral|info|success|warning|error: colore badge, chip, stat, callout, step, bar, seg); data-value (0 a 100, para bar/seg/col-bar); title, colspan, rowspan e data-canvas-item=\"<id>\" para marcar um elemento que o usuário pode adicionar ao contexto, comentar e filtrar (id [a-z0-9-], único); data-group=\"<nome>\" agrupa itens para o filtro do painel.",
-  "O painel mostra sozinho um filtro de texto/grupo quando há 6+ itens marcados. Prefira fluxogramas (flow/step) e gráficos (chart, stack, columns) quando ajudarem a entender.",
-  "Visual que o HTML acima não cobre (gráfico de linhas, SVG, diagrama complexo, interatividade): passe `embeds` ([{ id, html }]; HTML completo com style/script/svg, em iframe isolado sem rede, até 8 partes) e use <div data-embed=\"<id>\" data-height=\"<px opcional>\">texto equivalente</div> no html.",
-  "Sem script, style, link, imagem, iframe, formulário nem atributo on*/src/style no `html`: isso é removido e informado no retorno. HTML malformado é recusado e o canvas anterior permanece.",
-].join(" ");
+const PUBLISH_DESCRIPTION = [
+  "Publica ou atualiza o Canvas desta conversa: um painel lateral do OpenChamber (e uma página no navegador) que o usuário vê atualizar em tempo real.",
+  "O canvas é UM arquivo HTML livre por conversa (subagentes escrevem no canvas da conversa principal). Cada chamada SUBSTITUI o arquivo — reenvie o HTML inteiro. Para mudar só um trecho, use canvas_edit.",
+  "O retorno traz o caminho do arquivo: depois de publicar, Write/Edit nesse caminho também atualiza o painel na hora.",
+  "O HTML roda em iframe isolado, sem rede: CSS e JS inline valem, `<script>`, SVG inline e `<canvas>` também; fetch, imagens externas e links que saem do painel não funcionam. Links `<a href=\"https://…\">` abrem no navegador ao clicar.",
+  "Para o visual pronto (cards, tabelas, steps, badges, barras, stats), inclua `<link data-kit>` no `<head>`: carrega as classes `ck-*` e as cores do tema do OpenChamber.",
+  "Interação que o painel entende: `data-canvas-item=\"<id>\"` marca um elemento que o usuário pode adicionar ao contexto, comentar e remover; `data-filter=\"<chave>:<valor>\"` num elemento filtra, ao clicar, os que têm `data-tags` com o mesmo `<chave>:<valor>`.",
+  "Prefira fluxogramas, tabelas e gráficos quando ajudarem a entender.",
+].join("\n");
+
+const EDIT_DESCRIPTION = [
+  "Edita o Canvas desta conversa trocando UM trecho exato do HTML atual (`find` → `replace`), sem reenviar tudo.",
+  "Falha se `find` não existir ou aparecer mais de uma vez: inclua contexto suficiente para ser único. O painel atualiza na hora.",
+].join("\n");
+
+const TITLE_PROPERTY = { type: "string", description: `Título curto do canvas (até ${LIMITS.titleChars} caracteres); omitido, mantém o atual` };
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/** Falha de arquivo (permissão, disco): mensagem curta e sem caminho do sistema do usuário além do já exposto. */
+function failed(error: unknown, verb: "publicado" | "editado"): ToolResult {
+  return { content: `Canvas NÃO ${verb}: ${error instanceof Error ? error.message : "erro ao gravar o arquivo"}.` };
+}
 
 export default {
   id: "openchamber-canvas-viewer",
-  setup: async (ctx: PluginContext) => {
+  async setup(ctx: PluginContext): Promise<void> {
+    const lookup: SessionLookup = (sessionId) => ctx.session.get({ sessionID: sessionId });
+    const roots = new Map<string, string>();
+
+    /** Raiz da sessão + alias gravado, para o painel de um subagente achar o canvas da raiz. */
+    const rootFor = async (sessionId: string): Promise<string> => {
+      const root = await findRoot(sessionId, lookup, roots);
+      await writeAlias(sessionId, root);
+      return root;
+    };
+
     await ctx.tool.transform((tools) => {
       tools.add({
         name: "canvas_publish",
-        description: DESCRIPTION,
+        description: PUBLISH_DESCRIPTION,
         options: { codemode: false },
         input: {
           type: "object",
           properties: {
-            html: { type: "string", description: `HTML do canvas (até ${LIMITS.htmlChars} caracteres)` },
-            title: { type: "string", description: `Título curto do canvas (até ${LIMITS.titleChars} caracteres)` },
-            embeds: {
-              type: "array",
-              description: `Partes incorporadas (até ${LIMITS.embeds}): HTML completo, desenhado num iframe isolado sem rede; referenciado no html por <div data-embed="id">`,
-              items: {
-                type: "object",
-                properties: {
-                  id: { type: "string", description: "Id [a-z0-9-], até 40 caracteres, igual ao data-embed do html" },
-                  html: { type: "string", description: `HTML da parte (até ${LIMITS.embedChars} caracteres; style, script e svg valem)` },
-                },
-                required: ["id", "html"],
-                additionalProperties: false,
-              },
-            },
+            html: { type: "string", description: `Documento ou fragmento HTML do canvas (até ${LIMITS.canvasBytes} bytes)` },
+            title: TITLE_PROPERTY,
           },
           required: ["html"],
           additionalProperties: false,
         },
         async execute(input, context) {
-          const { html, title, embeds } = (input && typeof input === "object" ? input : {}) as { html?: unknown; title?: unknown; embeds?: unknown };
-          if (!SESSION_ID_PATTERN.test(String(context?.sessionID ?? ""))) {
-            return { content: "Canvas NÃO publicado: sessão desconhecida." };
+          if (!SESSION_ID_PATTERN.test(String(context?.sessionID ?? ""))) return { content: "Canvas NÃO publicado: sessão inválida." };
+          const body = (input ?? {}) as Record<string, unknown>;
+          try {
+            const result = await writeCanvas(await rootFor(context.sessionID), text(body.html), typeof body.title === "string" ? body.title : undefined);
+            if (!result.ok) return { content: `Canvas NÃO publicado: ${result.message}.` };
+            return { content: `Canvas publicado e visível no painel. Arquivo: ${result.file} (Write/Edit nele também atualiza o painel).` };
+          } catch (error) {
+            return failed(error, "publicado");
           }
-          const built = buildSnapshot(title, html, Date.now(), embeds);
-          if (!built.ok) return { content: `Canvas NÃO publicado: ${built.message}. O canvas anterior foi mantido; corrija e publique de novo.` };
+        },
+      });
 
-          const payload: InboxFile = {
-            v: INBOX_SCHEMA_VERSION,
-            sessionId: context.sessionID,
-            title: built.snapshot.title,
-            html: String(html),
-            ...(Object.keys(built.snapshot.embeds).length ? { embeds: Object.entries(built.snapshot.embeds).map(([id, body]) => ({ id, html: body })) } : {}),
-          };
-          const target = inboxFile(context.sessionID);
-          await mkdir(inboxDir(), { recursive: true });
-          const tmp = `${target}.${randomUUID()}.tmp`;
-          await writeFile(tmp, JSON.stringify(payload), "utf8");
-          await rename(tmp, target);
-
-          const blocked = built.snapshot.blocked.length ? ` Avisos (removido por segurança ou ajustado): ${built.snapshot.blocked.join(", ")}.` : "";
-          return { content: `Canvas publicado e visível no painel.${blocked}` };
+      tools.add({
+        name: "canvas_edit",
+        description: EDIT_DESCRIPTION,
+        options: { codemode: false },
+        input: {
+          type: "object",
+          properties: {
+            find: { type: "string", description: "Trecho exato do HTML atual a trocar (precisa aparecer uma única vez)" },
+            replace: { type: "string", description: "Texto que entra no lugar" },
+            title: TITLE_PROPERTY,
+          },
+          required: ["find", "replace"],
+          additionalProperties: false,
+        },
+        async execute(input, context) {
+          if (!SESSION_ID_PATTERN.test(String(context?.sessionID ?? ""))) return { content: "Canvas NÃO editado: sessão inválida." };
+          const body = (input ?? {}) as Record<string, unknown>;
+          try {
+            const result = await editCanvas(await rootFor(context.sessionID), text(body.find), text(body.replace), typeof body.title === "string" ? body.title : undefined);
+            if (!result.ok) return { content: `Canvas NÃO editado: ${result.message}.` };
+            return { content: `Canvas editado e visível no painel. Arquivo: ${result.file}.` };
+          } catch (error) {
+            return failed(error, "editado");
+          }
         },
       });
     });
