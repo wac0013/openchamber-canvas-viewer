@@ -2,11 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createActions, FAILURE_MESSAGES, ownedByFocus, type ActionHost, type ActionSnapshot } from "../src/canvas/actions.ts";
-import { parseCanvasHtml } from "../src/canvas/sanitize.ts";
 
-const parsed = parseCanvasHtml('<h1>Resumo</h1><p data-canvas-item="n1">42</p>');
-if (!parsed.ok) throw new Error("fixture");
-const shown = (owner: string) => ({ owner, title: "Painel", updatedAt: 1, tree: parsed.tree });
+const shown = (owner: string) => ({ owner, title: "Painel", updatedAt: 1, text: "Resumo\n[#n1] 42", items: [{ id: "n1", text: "42" }] });
 
 type Call = { type: "attach"; payload: any };
 
@@ -68,9 +65,7 @@ describe("addToContext", () => {
   });
 
   it("sinaliza truncamento", async () => {
-    const big = parseCanvasHtml(`<p>${"x".repeat(20_000)}</p>`);
-    if (!big.ok) throw new Error("fixture");
-    const { actions } = setup({ current: "A", shown: { owner: "A", title: "t", updatedAt: 1, tree: big.tree } });
+    const { actions } = setup({ current: "A", shown: { owner: "A", title: "t", updatedAt: 1, text: "x".repeat(20_000), items: [] } });
     assert.deepEqual(await actions.addToContext({ kind: "canvas" }), { ok: true, truncated: true });
   });
 });

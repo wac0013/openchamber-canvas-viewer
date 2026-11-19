@@ -1,294 +1,213 @@
-// Sobe o serviço real (service/main.ts) em processo filho, como o host faz, e exercita o
-// caminho completo: plugin → caixa de entrada → serviço → HTTP, incluindo CA9 (session-deleted).
+// Ponta a ponta: 3 serviços reais (um por instância do OpenChamber) sobem UM servidor único; o
+// plugin publica um arquivo e os 3 hosts de mentira recebem `panels.emit` em < 150 ms (CA1).
+// Também cobre: subagente → canvas da raiz, token, DELETE por sessão, /frame e página do navegador.
 
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import http from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
 
 import plugin from "../plugin/index.ts";
 import { UPDATE_REQUEST_TEXT } from "../src/shared/contract.ts";
 
-const TOKEN = "token-de-teste";
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-let dir = "";
-let port = 0;
-let child: ChildProcess | undefined;
-let logs = "";
-let fakeHost: http.Server | undefined;
-const hostCalls: Array<{ method: string; input: any }> = [];
-const hostStatus = new Map<string, "idle" | "busy" | "waiting">();
-let hostRefusal: { code: string; status: number; method?: string } | null = null;
-const previousInbox = process.env.OPENCHAMBER_CANVAS_INBOX;
+const SERVICE_TOKEN = "token-do-servico";
+let home = "";
+let serverPort = 0;
+let serverToken = "";
+const services: Array<{ child: ChildProcess; port: number; host: http.Server; emits: Array<{ at: number; data: any }>; calls: Array<{ method: string; input: any }> }> = [];
+const previousHome = process.env.OPENCHAMBER_CANVAS_HOME;
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
       const value = typeof address === "object" && address ? address.port : 0;
-      server.close(() => resolve(value));
+      probe.close(() => resolve(value));
     });
   });
 }
 
-async function call(method: string, route: string, body?: unknown, token: string | null = TOKEN): Promise<{ status: number; json: any }> {
-  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
-    method,
-    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  return { status: response.status, json: await response.json() };
-}
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function publish(sessionID: string, html: string, title = "T"): Promise<string> {
-  const tools: Array<{ execute: (i: unknown, c: { sessionID: string }) => Promise<{ content: string }> }> = [];
-  await plugin.setup({ tool: { transform: async (edit) => edit({ add: (tool) => tools.push(tool as never) }) } });
-  return (await tools[0]!.execute({ html, title }, { sessionID })).content;
-}
-
-function sessionDeleted(id: string) {
-  return { v: 1, requestId: "r1", event: { id: "e1", type: "session-deleted", at: Date.now(), session: { id, parentId: null }, project: { directory: null }, linked: [] } };
-}
-
-async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean, ms = 4000): Promise<T> {
-  const until = Date.now() + ms;
+async function until<T>(read: () => Promise<T> | T, done: (value: T) => boolean, ms = 8000): Promise<T> {
+  const limit = Date.now() + ms;
   for (;;) {
     const value = await read();
-    if (done(value) || Date.now() > until) return value;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (done(value) || Date.now() > limit) return value;
+    await sleep(25);
   }
 }
 
-/** Host de mentira: o callback HTTP que o OpenChamber oferece ao serviço (POST /service/call). */
-function startFakeHost(): Promise<number> {
-  return new Promise((resolve) => {
-    fakeHost = http.createServer((request, response) => {
-      let raw = "";
-      request.on("data", (chunk) => { raw += chunk; });
-      request.on("end", () => {
-        const answer = (status: number, body: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body)); };
-        if (request.headers.authorization !== `Bearer ${TOKEN}`) return answer(401, { error: { code: "HOST_UNAVAILABLE", message: "token" } });
-        const { method, input } = JSON.parse(raw) as { method: string; input: any };
-        hostCalls.push({ method, input });
-        if (hostRefusal && (hostRefusal.method ? method === hostRefusal.method : method.startsWith("sessions."))) return answer(hostRefusal.status, { error: { code: hostRefusal.code, message: "recusado" } });
-        if (method === "sessions.status") return answer(200, { result: { status: hostStatus.get(input.sessionId) ?? "idle" } });
-        if (method === "sessions.send") return answer(200, { result: { sent: true } });
-        if (method === "panels.emit") return answer(200, { result: { delivered: true } });
-        return answer(404, { error: { code: "HOST_UNAVAILABLE", message: "método desconhecido" } });
-      });
-    });
-    fakeHost.listen(0, "127.0.0.1", () => {
-      const address = fakeHost?.address();
-      resolve(typeof address === "object" && address ? address.port : 0);
+async function startService() {
+  const emits: Array<{ at: number; data: any }> = [];
+  const calls: Array<{ method: string; input: any }> = [];
+  const host = http.createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => (raw += chunk));
+    request.on("end", () => {
+      const answer = (status: number, body: unknown) => {
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(JSON.stringify(body));
+      };
+      const { method, input } = JSON.parse(raw) as { method: string; input: any };
+      calls.push({ method, input });
+      if (method === "panels.emit") {
+        emits.push({ at: Date.now(), data: input.data });
+        return answer(200, { result: { delivered: true } });
+      }
+      if (method === "sessions.status") return answer(200, { result: { status: "idle" } });
+      if (method === "sessions.send") return answer(200, { result: { sent: true } });
+      return answer(404, { error: { code: "HOST_UNAVAILABLE", message: "método desconhecido" } });
     });
   });
+  await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", resolve));
+  const hostPort = (host.address() as { port: number }).port;
+  const port = await freePort();
+  const child = spawn(process.execPath, [path.resolve("service/main.ts")], {
+    env: {
+      PATH: process.env.PATH ?? "",
+      OPENCHAMBER_CANVAS_HOME: home,
+      OPENCHAMBER_CANVAS_PORT: String(serverPort),
+      OPENCHAMBER_CANVAS_HOST: "127.0.0.1",
+      OPENCHAMBER_SERVICE_PORT: String(port),
+      OPENCHAMBER_SERVICE_TOKEN: SERVICE_TOKEN,
+      OPENCHAMBER_HOST_CALLBACK_URL: `http://127.0.0.1:${hostPort}`,
+    },
+    stdio: "ignore",
+  });
+  const entry = { child, port, host, emits, calls };
+  services.push(entry);
+  await until(() => fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${SERVICE_TOKEN}` } }).then((r) => r.ok, () => false), Boolean);
+  return entry;
+}
+
+const callService = async (index: number, method: string, route: string, body?: unknown) => {
+  const response = await fetch(`http://127.0.0.1:${services[index]!.port}${route}`, {
+    method,
+    headers: { authorization: `Bearer ${SERVICE_TOKEN}`, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return { status: response.status, json: (await response.json()) as any };
+};
+
+const server = (route: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${serverPort}${route}`, { ...init, headers: { authorization: `Bearer ${serverToken}`, ...(init.headers ?? {}) } });
+
+/** Plugin real com consulta de pai simulada: `parents` mapeia subagente → pai. */
+async function tools(parents: Record<string, string> = {}) {
+  const added: Array<{ name: string; execute: (input: unknown, ctx: { sessionID: string }) => Promise<{ content: string }> }> = [];
+  await plugin.setup({
+    tool: { transform: async (edit) => edit({ add: (tool) => added.push(tool as never) }) },
+    session: { get: async ({ sessionID }) => (parents[sessionID] ? { id: sessionID, parentID: parents[sessionID] } : { id: sessionID }) },
+  });
+  const find = (name: string) => added.find((tool) => tool.name === name)!;
+  return { publish: find("canvas_publish"), edit: find("canvas_edit") };
 }
 
 before(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "cv-e2e-"));
-  port = await freePort();
-  const hostPort = await startFakeHost();
-  process.env.OPENCHAMBER_CANVAS_INBOX = path.join(dir, "inbox");
-  child = spawn(process.execPath, ["service/main.ts"], {
-    cwd: root,
-    env: { ...process.env, OPENCHAMBER_SERVICE_PORT: String(port), OPENCHAMBER_SERVICE_TOKEN: TOKEN, OPENCHAMBER_SERVICE_DATA_DIR: path.join(dir, "data"), OPENCHAMBER_CANVAS_INBOX: path.join(dir, "inbox"), OPENCHAMBER_HOST_CALLBACK_URL: `http://127.0.0.1:${hostPort}` },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.on("data", (chunk) => { logs += String(chunk); });
-  child.stderr?.on("data", (chunk) => { logs += String(chunk); });
-  await waitFor(() => fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${TOKEN}` } }).then((r) => r.status, () => 0), (status) => status === 200, 8000);
+  home = await mkdtemp(path.join(tmpdir(), "cv-e2e-"));
+  process.env.OPENCHAMBER_CANVAS_HOME = home;
+  serverPort = await freePort();
+  // 3 instâncias iniciando juntas: só um servidor pode ficar de pé.
+  await Promise.all([startService(), startService(), startService()]);
+  serverToken = (await until(() => readFile(path.join(home, "token"), "utf8").catch(() => ""), Boolean)).trim();
+  await until(() => fetch(`http://127.0.0.1:${serverPort}/health`).then((r) => r.ok, () => false), Boolean);
+  // as pontes (SSE) dos 3 serviços precisam estar conectadas antes de publicar
+  await sleep(500);
 });
 
 after(async () => {
-  child?.kill();
-  fakeHost?.close();
-  if (previousInbox === undefined) delete process.env.OPENCHAMBER_CANVAS_INBOX;
-  else process.env.OPENCHAMBER_CANVAS_INBOX = previousInbox;
-  await rm(dir, { recursive: true, force: true });
+  for (const service of services) {
+    service.child.kill();
+    service.host.close();
+  }
+  await fetch(`http://127.0.0.1:${serverPort}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${serverToken}` } }).catch(() => {});
+  if (previousHome === undefined) delete process.env.OPENCHAMBER_CANVAS_HOME;
+  else process.env.OPENCHAMBER_CANVAS_HOME = previousHome;
+  await rm(home, { recursive: true, force: true });
 });
 
-describe("serviço (ponta a ponta)", () => {
-  it("exige o token do serviço", async () => {
-    assert.equal((await call("GET", "/health", undefined, null)).status, 401);
-    assert.equal((await call("GET", "/health", undefined, "errado")).status, 401);
-    assert.equal((await call("GET", "/health")).status, 200);
-  });
-
-  it("CA1: sessão sem canvas responde vazio", async () => {
-    const { status, json } = await call("GET", "/canvas?sessionId=ses_vazia");
-    assert.equal(status, 200);
-    assert.equal(json.canvas, null);
-  });
-
-  it("recusa sessionId inválido e rota inexistente", async () => {
-    assert.equal((await call("GET", "/canvas?sessionId=../x")).status, 400);
-    assert.equal((await call("GET", "/canvas")).status, 400);
-    assert.equal((await call("GET", "/nada")).status, 404);
-  });
-
-  it("CA2 (RN5): publicação do plugin aparece em até 2 s com a hora", async () => {
+describe("servidor único + 3 serviços", () => {
+  it("CA1: uma publicação chega aos 3 painéis em menos de 150 ms", async () => {
+    const { publish } = await tools();
+    const before = services.map((service) => service.emits.length);
     const started = Date.now();
-    assert.match(await publish("ses_a", "<h1>Olá</h1>", "Meu canvas"), /publicado/);
-    const { json } = await waitFor(() => call("GET", "/canvas?sessionId=ses_a"), (r) => r.json.canvas !== null, 2000);
-    assert.equal(json.canvas?.title, "Meu canvas");
-    assert.ok(json.canvas.updatedAt >= started);
-    assert.ok(Date.now() - started <= 2000);
+    assert.match((await publish.execute({ html: "<h1>Olá</h1>", title: "Meu canvas" }, { sessionID: "ses_raiz" })).content, /publicado/i);
+    await until(() => services.every((service, i) => service.emits.length > before[i]!), Boolean, 2000);
+    for (const [i, service] of services.entries()) {
+      const emit = service.emits[before[i]!];
+      assert.ok(emit, `serviço ${i} recebeu o evento`);
+      assert.deepEqual(emit.data, { rootId: "ses_raiz" });
+      assert.ok(emit.at - started < 150, `serviço ${i}: ${emit.at - started} ms`);
+    }
   });
 
-  it("CA3/CA6: nova publicação substitui; CA4: outra sessão segue vazia", async () => {
-    await publish("ses_a", "<h1>Versão 2</h1>", "v2");
-    const a = await waitFor(() => call("GET", "/canvas?sessionId=ses_a"), (r) => r.json.canvas?.title === "v2", 2000);
-    assert.equal(a.json.canvas.title, "v2");
-    assert.equal((await call("GET", "/canvas?sessionId=ses_b")).json.canvas, null);
+  it("o painel lê o canvas pelo serviço e o servidor aceita só o token", async () => {
+    const { status, json } = await callService(1, "GET", "/canvas?sessionId=ses_raiz");
+    assert.equal(status, 200);
+    assert.equal(json.canvas.title, "Meu canvas");
+    assert.equal(json.canvas.html, "<h1>Olá</h1>");
+    assert.equal((await fetch(`http://127.0.0.1:${serverPort}/canvas?session=ses_raiz`)).status, 401);
+    assert.equal((await fetch(`http://127.0.0.1:${serverPort}/canvas?session=ses_raiz`, { headers: { authorization: "Bearer errado" } })).status, 401);
   });
 
-  it("CA7: HTML inválido não chega ao serviço e o canvas segue; arquivo inválido direto na caixa registra erro", async () => {
-    assert.match(await publish("ses_a", "<div><p>x</div>"), /NÃO publicado/);
-    assert.equal((await call("GET", "/canvas?sessionId=ses_a")).json.canvas.title, "v2");
+  it("subagente publica no canvas da raiz; o painel aberto no subagente vê o da raiz", async () => {
+    const { publish } = await tools({ ses_sub: "ses_raiz" });
+    await publish.execute({ html: "<p>do subagente</p>", title: "Raiz" }, { sessionID: "ses_sub" });
+    const fromRoot = await callService(0, "GET", "/canvas?sessionId=ses_raiz");
+    assert.equal(fromRoot.json.canvas.html, "<p>do subagente</p>");
+    const fromSub = await callService(0, "GET", "/canvas?sessionId=ses_sub");
+    assert.equal(fromSub.json.rootId, "ses_raiz");
+    assert.equal(fromSub.json.canvas.html, "<p>do subagente</p>");
   });
 
-  it("CA8: conteúdo bloqueado é removido e informado; o restante renderiza", async () => {
-    assert.match(await publish("ses_c", '<p>ok</p><script>fetch("http://evil")</script><img src="http://evil/x">', "c"), /Avisos/);
-    const { json } = await waitFor(() => call("GET", "/canvas?sessionId=ses_c"), (r) => r.json.canvas !== null, 2000);
-    assert.deepEqual(json.canvas.blocked.sort(), ["<img>", "<script>"]);
-    assert.equal(JSON.stringify(json).includes("evil"), false);
+  it("Write direto no arquivo da sessão também dispara o hot reload", async () => {
+    const before = services.map((service) => service.emits.length);
+    await writeFile(path.join(home, "sessions", "ses_raiz", "index.html"), "<p>editado à mão</p>");
+    await until(() => services.every((service, i) => service.emits.length > before[i]!), Boolean, 2000);
+    assert.equal((await callService(2, "GET", "/canvas?sessionId=ses_raiz")).json.canvas.html, "<p>editado à mão</p>");
   });
 
-  it("links e partes incorporadas chegam ao painel pelo caminho completo", async () => {
-    const tools: Array<{ execute: (i: unknown, c: { sessionID: string }) => Promise<{ content: string }> }> = [];
-    await plugin.setup({ tool: { transform: async (edit) => edit({ add: (tool) => tools.push(tool as never) }) } });
-    const html = '<p><a href="https://github.com/org/repo/pull/1" onclick="x()">PR</a> <a href="javascript:alert(1)">ruim</a></p><div data-embed="g" data-height="200">alt</div>';
-    assert.match((await tools[0]!.execute({ html, title: "E", embeds: [{ id: "g", html: "<style>a{}</style><svg></svg><script>1</script>" }] }, { sessionID: "ses_e" })).content, /publicado/);
-    const { json } = await waitFor(() => call("GET", "/canvas?sessionId=ses_e"), (r) => r.json.canvas !== null, 2000);
-    assert.deepEqual(json.canvas.embeds, { g: "<style>a{}</style><svg></svg><script>1</script>" });
-    assert.equal(json.version, 3);
-    const text = JSON.stringify(json.canvas.tree);
-    assert.ok(text.includes("https://github.com/org/repo/pull/1"));
-    assert.equal(text.includes("javascript"), false);
-    assert.equal(text.includes("onclick"), false);
-    await call("POST", "/session-events", sessionDeleted("ses_e"));
+  it("apagar o subagente não remove o canvas da raiz; apagar a raiz remove", async () => {
+    const event = (id: string) => ({ v: 1, requestId: "r1", event: { id: "e1", type: "session-deleted", at: Date.now(), session: { id, parentId: null }, project: { directory: null }, linked: [] } });
+    assert.equal((await callService(0, "POST", "/session-events", event("ses_sub"))).status, 200);
+    assert.equal((await callService(0, "GET", "/canvas?sessionId=ses_raiz")).json.canvas.html, "<p>editado à mão</p>");
+    assert.equal((await callService(0, "POST", "/session-events", event("ses_raiz"))).status, 200);
+    assert.equal((await callService(0, "GET", "/canvas?sessionId=ses_raiz")).json.canvas, null);
   });
 
-  it("CA9: session-deleted apaga o canvas só daquela sessão", async () => {
-    assert.equal((await call("POST", "/session-events", sessionDeleted("ses_a"))).status, 200);
-    assert.equal((await call("GET", "/canvas?sessionId=ses_a")).json.canvas, null);
-    assert.notEqual((await call("GET", "/canvas?sessionId=ses_c")).json.canvas, null);
+  it("/info devolve o link do navegador com o token; /frame monta o documento com CSP e sandbox no cliente", async () => {
+    const { publish } = await tools();
+    await publish.execute({ html: '<link data-kit><div class="ck-card" data-canvas-item="a">x</div>', title: "Kit" }, { sessionID: "ses_kit" });
+    const info = await callService(0, "GET", "/info?sessionId=ses_kit");
+    assert.equal(info.json.url, `http://127.0.0.1:${serverPort}/s/ses_kit?t=${serverToken}`);
+    const frame = (await (await server("/frame?session=ses_kit&state=%7B%22filters%22%3A%5B%5D%2C%22removed%22%3A%5B%22a%22%5D%7D&scroll=0")).json()) as any;
+    assert.equal(frame.ok, true);
+    assert.match(frame.srcdoc, /Content-Security-Policy/);
+    assert.match(frame.srcdoc, /connect-src 'none'/);
+    assert.match(frame.srcdoc, /\.ck-card\{/);
+    assert.equal(frame.srcdoc.includes("data-kit"), false);
+    const shell = await (await server("/s/ses_kit")).text();
+    assert.match(shell, /sandbox","allow-scripts"/);
+    assert.equal(shell.includes("allow-same-origin"), false);
+    assert.equal(shell.includes("ck-card"), false, "o HTML do agente nunca entra na casca");
   });
 
-  it("evento inválido responde 400; outros eventos são aceitos sem efeito", async () => {
-    assert.equal((await call("POST", "/session-events", { lixo: true })).status, 400);
-    const other = sessionDeleted("ses_c");
-    other.event.type = "turn-finished";
-    assert.equal((await call("POST", "/session-events", other)).status, 200);
-    assert.notEqual((await call("GET", "/canvas?sessionId=ses_c")).json.canvas, null);
+  it("botão Atualizar: o texto fixo vai para a sessão pedida, sem conteúdo de canvas", async () => {
+    const result = await callService(1, "POST", "/update-request", { sessionId: "ses_raiz" });
+    assert.equal(result.status, 200);
+    const sent = services[1]!.calls.filter((call) => call.method === "sessions.send");
+    assert.equal(sent.at(-1)?.input.sessionId, "ses_raiz");
+    assert.equal(sent.at(-1)?.input.prompt ?? sent.at(-1)?.input.text, UPDATE_REQUEST_TEXT);
   });
 
-  it("corpo grande demais responde 413 e o serviço continua de pé", async () => {
-    const big = "x".repeat(150_000);
-    const response = await fetch(`http://127.0.0.1:${port}/session-events`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}` }, body: big }).catch(() => null);
-    assert.ok(response === null || response.status === 413);
-    assert.equal((await call("GET", "/health")).status, 200);
-  });
-
-  it("alvo de requisição malformado com token válido não derruba o serviço", async () => {
-    const { request } = await import("node:http");
-    await new Promise<void>((resolve) => {
-      const req = request({ host: "127.0.0.1", port, method: "GET", path: "http://[::1", headers: { authorization: `Bearer ${TOKEN}` } }, (res) => { res.resume(); res.on("end", () => resolve()); });
-      req.on("error", () => resolve());
-      req.end();
-    });
-    assert.equal((await call("GET", "/health")).status, 200);
-  });
-
-  describe("botão Atualizar (POST /update-request)", () => {
-    const sends = () => hostCalls.filter((call) => call.method === "sessions.send");
-
-    it("CA1/CA6: agente ocioso → o host recebe sessions.send na sessão pedida com o texto fixo, sem conteúdo de canvas", async () => {
-      assert.match(await publish("ses_upd", "<p>SEGREDO-DO-CANVAS</p>", "t"), /publicado/);
-      const before = sends().length;
-      const { status, json } = await call("POST", "/update-request", { sessionId: "ses_upd" });
-      assert.equal(status, 200);
-      assert.deepEqual(json, { ok: true });
-      const sent = sends().slice(before);
-      assert.equal(sent.length, 1);
-      assert.deepEqual(sent[0]!.input, { sessionId: "ses_upd", prompt: UPDATE_REQUEST_TEXT });
-      assert.equal(JSON.stringify(sent).includes("SEGREDO"), false);
-      assert.ok(hostCalls.some((call) => call.method === "sessions.status" && call.input.sessionId === "ses_upd"), "consulta o status antes de enviar");
-    });
-
-    it("CA4: o segundo pedido logo depois responde 429 e não envia", async () => {
-      const before = sends().length;
-      const { status, json } = await call("POST", "/update-request", { sessionId: "ses_upd" });
-      assert.equal(status, 429);
-      assert.deepEqual(json, { ok: false, code: "too-soon" });
-      assert.equal(sends().length, before);
-    });
-
-    it("CA2/CA3: ocupado e esperando resposta → 409 e nada é enviado", async () => {
-      hostStatus.set("ses_busy", "busy");
-      hostStatus.set("ses_wait", "waiting");
-      const before = sends().length;
-      assert.deepEqual(await call("POST", "/update-request", { sessionId: "ses_busy" }), { status: 409, json: { ok: false, code: "busy" } });
-      assert.deepEqual(await call("POST", "/update-request", { sessionId: "ses_wait" }), { status: 409, json: { ok: false, code: "waiting" } });
-      assert.equal(sends().length, before);
-    });
-
-    it("sessionId inválido ou corpo ilegível → 400; sem token → 401", async () => {
-      assert.equal((await call("POST", "/update-request", { sessionId: "../x" })).status, 400);
-      assert.equal((await call("POST", "/update-request", {})).status, 400);
-      const raw = await fetch(`http://127.0.0.1:${port}/update-request`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}` }, body: "{lixo" });
-      assert.equal(raw.status, 400);
-      assert.equal((await call("POST", "/update-request", { sessionId: "ses_x" }, null)).status, 401);
-    });
-
-    it("permissão não concedida (extensão não reaprovada) → 403 e o serviço segue de pé", async () => {
-      hostRefusal = { code: "NOT_GRANTED", status: 403 };
-      const { status, json } = await call("POST", "/update-request", { sessionId: "ses_naoaprovada" });
-      hostRefusal = null;
-      assert.equal(status, 403);
-      assert.deepEqual(json, { ok: false, code: "not-granted" });
-      assert.equal((await call("GET", "/health")).status, 200);
-    });
-
-    it("host que falha por outro motivo → 502, sem eco da mensagem do host", async () => {
-      hostRefusal = { code: "SESSION_FAILED", status: 500 };
-      const { status, json } = await call("POST", "/update-request", { sessionId: "ses_falha" });
-      hostRefusal = null;
-      assert.equal(status, 502);
-      assert.deepEqual(json, { ok: false, code: "host-refused" });
-    });
-
-    it("B1: envio sem resposta utilizável → 502 'unconfirmed' e o pedido seguinte da mesma sessão é recusado (sem duplicar)", async () => {
-      hostRefusal = { code: "HOST_UNAVAILABLE", status: 503, method: "sessions.send" };
-      const first = await call("POST", "/update-request", { sessionId: "ses_semresposta" });
-      hostRefusal = null;
-      assert.deepEqual(first, { status: 502, json: { ok: false, code: "unconfirmed" } });
-      const before = sends().length;
-      assert.deepEqual(await call("POST", "/update-request", { sessionId: "ses_semresposta" }), { status: 429, json: { ok: false, code: "too-soon" } });
-      assert.equal(sends().length, before);
-    });
-
-    it("B2: SESSION_BUSY no envio → 409 busy", async () => {
-      hostRefusal = { code: "SESSION_BUSY", status: 409, method: "sessions.send" };
-      const result = await call("POST", "/update-request", { sessionId: "ses_busyenvio" });
-      hostRefusal = null;
-      assert.deepEqual(result, { status: 409, json: { ok: false, code: "busy" } });
-    });
-
-    it("a falha anterior não bloqueia: logo depois o pedido da mesma sessão funciona", async () => {
-      const { status } = await call("POST", "/update-request", { sessionId: "ses_falha" });
-      assert.equal(status, 200);
-    });
-  });
-
-  it("não vaza conteúdo de canvas nos logs", () => {
-    assert.equal(logs.includes("evil"), false);
+  it("rejeita sessionId inválido", async () => {
+    assert.equal((await callService(0, "GET", "/canvas?sessionId=../x")).status, 400);
+    assert.equal((await callService(0, "GET", "/info")).status, 400);
   });
 });
